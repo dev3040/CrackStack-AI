@@ -1,4 +1,4 @@
-# Interview Copilot
+# CrackStack-AI
 
 A transparent **Electron overlay** for technical interview prep and live sessions: **speech-to-text** (optional), **structured AI answers** (short summary, detail, code, complexity, hints), and a separate **Chat with AI** thread. Keys stay in the **main process**; the UI is **React + Tailwind + Zustand**.
 
