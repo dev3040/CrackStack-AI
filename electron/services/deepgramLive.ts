@@ -9,9 +9,100 @@ type Handlers = {
   onClose: () => void;
 };
 
+type Alt = { transcript?: string; confidence?: number };
+
+function envTrim(key: string): string | undefined {
+  const v = process.env[key]?.trim();
+  return v && v.length > 0 ? v : undefined;
+}
+
+/**
+ * Defaults tuned for video calls (Meet, Zoom, etc.): Nova-3 accuracy, explicit English,
+ * slightly longer endpointing so words aren’t cut on choppy VoIP.
+ */
+function buildListenQueryParams(sampleRate: number): URLSearchParams {
+  const model = envTrim('DEEPGRAM_MODEL') ?? 'nova-3';
+  const language = envTrim('DEEPGRAM_LANGUAGE') ?? 'en';
+
+  const endpointing = envTrim('DEEPGRAM_ENDPOINTING') ?? '550';
+  const utteranceEnd =
+    envTrim('DEEPGRAM_UTTERANCE_END_MS') ?? '1300';
+
+  const smartFormatRaw = envTrim('DEEPGRAM_SMART_FORMAT');
+  const smartFormat =
+    smartFormatRaw === undefined
+      ? true
+      : !/^(0|false|no|off)$/i.test(smartFormatRaw);
+
+  const params = new URLSearchParams({
+    encoding: 'linear16',
+    sample_rate: String(sampleRate),
+    channels: '1',
+    model,
+    language,
+    interim_results: 'true',
+    punctuate: 'true',
+    endpointing,
+    utterance_end_ms: utteranceEnd,
+  });
+
+  if (smartFormat) {
+    params.set('smart_format', 'true');
+  } else {
+    params.set('smart_format', 'false');
+  }
+
+  appendVocabularyBoosts(params, model);
+
+  return params;
+}
+
+/** Nova-3+: keyterm. Nova-2 / Enhanced / Base: keywords with optional :intensifier. */
+function appendVocabularyBoosts(params: URLSearchParams, model: string): void {
+  const raw = envTrim('DEEPGRAM_KEYTERMS');
+  if (!raw) return;
+
+  const terms = raw
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .slice(0, 80);
+  if (terms.length === 0) return;
+
+  const useKeyterm = /^nova-3/i.test(model) || /^flux-/i.test(model);
+
+  if (useKeyterm) {
+    for (const t of terms) {
+      params.append('keyterm', t);
+    }
+    return;
+  }
+
+  for (const t of terms) {
+    const hasBoost = /:\s*[\d.-]+$/i.test(t);
+    const kw = hasBoost ? t : `${t}:1.5`;
+    params.append('keywords', kw);
+  }
+}
+
+function pickBestTranscript(alternatives: Alt[] | undefined): string {
+  if (!alternatives?.length) return '';
+  let best = alternatives[0];
+  let bestConf = best.confidence ?? -1;
+  for (let i = 1; i < alternatives.length; i++) {
+    const a = alternatives[i];
+    const c = a.confidence ?? -1;
+    if (c > bestConf) {
+      best = a;
+      bestConf = c;
+    }
+  }
+  return best.transcript?.trim() ?? '';
+}
+
 /**
  * Deepgram live streaming over WebSocket.
- * Sends linear16 mono PCM at sampleRate (default 16kHz).
+ * Sends linear16 mono PCM at sampleRate (browser AudioContext is often 48 kHz).
  * @see https://developers.deepgram.com/docs/getting-started-with-live-streaming-audio
  */
 export class DeepgramLiveSession {
@@ -29,16 +120,7 @@ export class DeepgramLiveSession {
   connect(): void {
     if (this.ws) return;
 
-    const params = new URLSearchParams({
-      encoding: 'linear16',
-      sample_rate: String(this.sampleRate),
-      channels: '1',
-      model: 'nova-2',
-      interim_results: 'true',
-      endpointing: '400',
-      utterance_end_ms: '1000',
-    });
-
+    const params = buildListenQueryParams(this.sampleRate);
     const url = `wss://api.deepgram.com/v1/listen?${params.toString()}`;
     this.ws = new WebSocket(url, {
       headers: { Authorization: `Token ${this.apiKey}` },
@@ -49,13 +131,13 @@ export class DeepgramLiveSession {
         const payload = JSON.parse(data.toString()) as {
           type?: string;
           channel?: {
-            alternatives?: Array<{ transcript?: string }>;
+            alternatives?: Alt[];
           };
           is_final?: boolean;
           speech_final?: boolean;
         };
         if (payload.type !== 'Results') return;
-        const text = payload.channel?.alternatives?.[0]?.transcript?.trim() ?? '';
+        const text = pickBestTranscript(payload.channel?.alternatives);
         if (!text) return;
         this.handlers.onTranscript({
           text,

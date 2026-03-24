@@ -21,6 +21,8 @@ export type LlmConfig = {
   provider: 'groq' | 'openrouter' | 'openai';
 };
 
+const MULTI_QUESTION_HINT = `If the latest utterance contains several distinct questions in one turn, answer all of them: one shortAnswer line that covers each briefly, then detailedExplanation addressing each in order (optional light Q1/Q2 labels). If they are unrelated coding tasks, prioritize the main one in codeSnippet and mention the other in text.`;
+
 const SYSTEM_PROMPT = `You are CrackStack AI. Given interview dialogue, produce interview-ready help.
 
 Rules:
@@ -28,6 +30,7 @@ Rules:
 - shortAnswer must be plain English sentences only — never source code, never lines with { } blocks, never a full function signature.
 - Put ALL source code exclusively in codeSnippet (complete solution when code is required).
 - If the utterance is not a technical question, set kind to HR or UNKNOWN and answer briefly.
+- ${MULTI_QUESTION_HINT}
 - Escape newlines inside JSON strings as \\n.`;
 
 /** Phase 1 (coding): JSON without code body — code comes from a second request. */
@@ -103,6 +106,7 @@ Latest utterance (candidate or interviewer):
 """
 ${input.latestUtterance}
 """
+${MULTI_QUESTION_HINT}
 
 Rolling conversation (compressed):
 """
@@ -140,6 +144,7 @@ Latest utterance:
 """
 ${input.latestUtterance}
 """
+${MULTI_QUESTION_HINT}
 
 Rolling conversation:
 """

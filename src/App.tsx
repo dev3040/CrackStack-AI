@@ -14,7 +14,37 @@ const api = window.copilotApi;
 
 const CAPTURE_SHIELD_STORAGE = 'copilot.captureShield';
 const MEET_TAB_AUDIO_STORAGE = 'copilot.includeMeetTabAudio';
+const STT_SYSTEM_ONLY_STORAGE = 'copilot.sttSystemAudioOnly';
 const OVERLAY_OPACITY_STORAGE = 'copilot.overlayOpacity';
+const MIC_DEVICE_STORAGE = 'copilot.micDeviceId';
+const MIC_GAIN_STORAGE = 'copilot.micGain';
+const TAB_GAIN_STORAGE = 'copilot.tabGain';
+const HEADSET_MODE_STORAGE = 'copilot.headsetAudioMode';
+
+/**
+ * After each STT final, wait this long with no further finals before calling the model.
+ * Back-to-back questions (short pause between) merge into one prompt instead of answering the first alone.
+ */
+const STT_SILENCE_BEFORE_GENERATE_MS = 1500;
+
+/** Merge successive Deepgram finals into one “current turn” string without naive duplication. */
+function mergeQuestionBurst(prev: string, next: string): string {
+  const a = prev.trim();
+  const b = next.trim();
+  if (!a) return b;
+  if (!b) return a;
+  if (a === b) return a;
+  if (b.startsWith(a)) return b;
+  if (a.startsWith(b)) return a;
+  return `${a} ${b}`;
+}
+
+function readGainStorage(key: string, fallback: number): number {
+  if (typeof localStorage === 'undefined') return fallback;
+  const v = parseFloat(localStorage.getItem(key) ?? '');
+  if (!Number.isFinite(v)) return fallback;
+  return Math.min(4, Math.max(0.25, v));
+}
 
 function clampUiOpacity(v: number): number {
   if (!Number.isFinite(v)) return 1;
@@ -53,7 +83,8 @@ function formatAnswerForClipboard(a: {
 
 export default function App() {
   const stopCaptureRef = useRef<(() => Promise<void>) | null>(null);
-  const genTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const silenceGenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const questionBurstRef = useRef<string>('');
   const finalFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -65,7 +96,34 @@ export default function App() {
       typeof localStorage !== 'undefined' &&
       localStorage.getItem(MEET_TAB_AUDIO_STORAGE) === '1',
   );
+  /** With Meet/system capture: default on so STT uses playback/loopback only, not your headset mic. */
+  const [sttSystemAudioOnly, setSttSystemAudioOnly] = useState(() => {
+    if (typeof localStorage === 'undefined') return true;
+    const v = localStorage.getItem(STT_SYSTEM_ONLY_STORAGE);
+    if (v === '0') return false;
+    if (v === '1') return true;
+    return true;
+  });
   const [audioHint, setAudioHint] = useState<string | null>(null);
+  const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
+  const [micDeviceId, setMicDeviceId] = useState(
+    () =>
+      typeof localStorage !== 'undefined'
+        ? (localStorage.getItem(MIC_DEVICE_STORAGE) ?? '')
+        : '',
+  );
+  const [micGain, setMicGain] = useState(() =>
+    readGainStorage(MIC_GAIN_STORAGE, 1),
+  );
+  const [tabGain, setTabGain] = useState(() =>
+    readGainStorage(TAB_GAIN_STORAGE, 1),
+  );
+  const [headsetMode, setHeadsetMode] = useState(
+    () =>
+      typeof localStorage === 'undefined' ||
+      localStorage.getItem(HEADSET_MODE_STORAGE) !== '0',
+  );
+  const [deviceChangeHint, setDeviceChangeHint] = useState(false);
 
   const [chatMessages, setChatMessages] = useState<ChatTurn[]>([]);
   const [chatInput, setChatInput] = useState('');
@@ -141,12 +199,18 @@ export default function App() {
     ],
   );
 
-  const scheduleGenerate = useCallback(
-    (text: string) => {
-      if (genTimerRef.current) clearTimeout(genTimerRef.current);
-      genTimerRef.current = setTimeout(() => {
-        void runGenerate(text);
-      }, 500);
+  const scheduleGenerateAfterSttSilence = useCallback(
+    (chunk: string) => {
+      const c = chunk.trim();
+      if (!c) return;
+      questionBurstRef.current = mergeQuestionBurst(questionBurstRef.current, c);
+      if (silenceGenTimerRef.current) clearTimeout(silenceGenTimerRef.current);
+      silenceGenTimerRef.current = setTimeout(() => {
+        silenceGenTimerRef.current = null;
+        const text = questionBurstRef.current.trim();
+        questionBurstRef.current = '';
+        if (text) void runGenerate(text);
+      }, STT_SILENCE_BEFORE_GENERATE_MS);
     },
     [runGenerate],
   );
@@ -179,6 +243,29 @@ export default function App() {
     document.documentElement.classList.toggle('copilot-solid', solid);
     return () => document.documentElement.classList.remove('copilot-solid');
   }, [overlayOpacity]);
+
+  const refreshMicDevices = useCallback(async () => {
+    try {
+      const list = await navigator.mediaDevices.enumerateDevices();
+      setMicDevices(list.filter((d) => d.kind === 'audioinput'));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    if (toolsOpen) void refreshMicDevices();
+  }, [toolsOpen, refreshMicDevices]);
+
+  useEffect(() => {
+    const onChange = () => {
+      void refreshMicDevices();
+      if (sttRunning) setDeviceChangeHint(true);
+    };
+    navigator.mediaDevices.addEventListener('devicechange', onChange);
+    return () =>
+      navigator.mediaDevices.removeEventListener('devicechange', onChange);
+  }, [sttRunning, refreshMicDevices]);
 
   useEffect(() => {
     void api.capabilities().then((c) => {
@@ -217,7 +304,7 @@ export default function App() {
         }
         appendFinalTranscript(t);
         rebuildSummary();
-        scheduleGenerate(t);
+        scheduleGenerateAfterSttSilence(t);
         return;
       }
       if (ev.isFinal) {
@@ -227,7 +314,7 @@ export default function App() {
         finalFallbackTimerRef.current = setTimeout(() => {
           appendFinalTranscript(t);
           rebuildSummary();
-          scheduleGenerate(t);
+          scheduleGenerateAfterSttSilence(t);
         }, 750);
       }
     });
@@ -239,13 +326,29 @@ export default function App() {
         clearTimeout(finalFallbackTimerRef.current);
         finalFallbackTimerRef.current = null;
       }
+      if (silenceGenTimerRef.current) {
+        clearTimeout(silenceGenTimerRef.current);
+        silenceGenTimerRef.current = null;
+      }
+      questionBurstRef.current = '';
     };
-  }, [appendFinalTranscript, rebuildSummary, scheduleGenerate, setError, setLiveLine]);
+  }, [
+    appendFinalTranscript,
+    rebuildSummary,
+    scheduleGenerateAfterSttSilence,
+    setError,
+    setLiveLine,
+  ]);
 
   const toggleStt = async () => {
     setError(null);
     setAudioHint(null);
     if (sttRunning) {
+      if (silenceGenTimerRef.current) {
+        clearTimeout(silenceGenTimerRef.current);
+        silenceGenTimerRef.current = null;
+      }
+      questionBurstRef.current = '';
       await stopCaptureRef.current?.();
       stopCaptureRef.current = null;
       await api.sttStop();
@@ -257,15 +360,26 @@ export default function App() {
       return;
     }
     try {
+      const audioOpts = {
+        deviceId: micDeviceId || undefined,
+        micGain,
+        tabGain,
+        headsetMode,
+      };
       const capture = includeMeetTabAudio
         ? await startMeetMixedPcmCapture((pcm) => api.sttSendPcm(pcm), {
+            ...audioOpts,
             includeMeetTabAudio: true,
+            systemAudioOnly: sttSystemAudioOnly,
           })
-        : await startMicPcmCapture((pcm) => api.sttSendPcm(pcm));
+        : await startMicPcmCapture((pcm) => api.sttSendPcm(pcm), audioOpts);
+      setDeviceChangeHint(false);
 
-      if (includeMeetTabAudio && !capture.hadMeetTabAudio) {
+      if (includeMeetTabAudio && !capture.hadMeetTabAudio && !sttSystemAudioOnly) {
         setAudioHint(
-          'Mic only: tab audio was not shared. In Chrome, select the Google Meet tab and turn ON “Share tab audio”.',
+          capabilities.platform === 'win32'
+            ? 'Mic only: system audio was not attached. Allow the capture prompt, check Windows Privacy → Microphone, and ensure sound plays on your default output device.'
+            : 'Mic only: tab audio was not shared. When prompted, select the Meet tab and turn ON “Share tab audio”.',
         );
       }
 
@@ -303,10 +417,11 @@ export default function App() {
   };
 
   const clearConversation = () => {
-    if (genTimerRef.current) {
-      clearTimeout(genTimerRef.current);
-      genTimerRef.current = null;
+    if (silenceGenTimerRef.current) {
+      clearTimeout(silenceGenTimerRef.current);
+      silenceGenTimerRef.current = null;
     }
+    questionBurstRef.current = '';
     if (finalFallbackTimerRef.current) {
       clearTimeout(finalFallbackTimerRef.current);
       finalFallbackTimerRef.current = null;
@@ -451,13 +566,174 @@ export default function App() {
               />
               <span>
                 <span className="font-medium text-slate-100">
-                  Meet / tab audio
+                  {capabilities.platform === 'win32'
+                    ? 'Meet + system audio (Windows)'
+                    : 'Meet / tab audio'}
                 </span>
                 <span className="mt-0.5 block text-copilot-muted">
-                  Share the Meet tab with “Share tab audio” when starting STT.
+                  {capabilities.platform === 'win32'
+                    ? 'Uses your primary display for capture permission; audio is system loopback (what plays on your default output). The next checkbox controls whether your microphone is mixed in or left out.'
+                    : 'When starting STT, pick the browser tab where Meet runs and turn on “Share tab audio”. The next checkbox can exclude your mic so only tab audio is transcribed.'}
                 </span>
               </span>
             </label>
+
+            {includeMeetTabAudio ? (
+              <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-copilot-border/80 bg-copilot-surface/30 p-2.5">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={sttSystemAudioOnly}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    localStorage.setItem(STT_SYSTEM_ONLY_STORAGE, on ? '1' : '0');
+                    setSttSystemAudioOnly(on);
+                  }}
+                />
+                <span>
+                  <span className="font-medium text-slate-100">
+                    System / tab audio only (no microphone)
+                  </span>
+                  <span className="mt-0.5 block text-copilot-muted">
+                    {capabilities.platform === 'win32'
+                      ? 'STT listens to default playback (loopback) only — not your headset or USB mic. Uncheck to mix in your voice with remote audio.'
+                      : 'STT uses shared tab audio only. Uncheck to also capture your microphone.'}
+                  </span>
+                </span>
+              </label>
+            ) : null}
+
+            <div className="rounded-lg border border-copilot-border/80 bg-copilot-surface/30 p-2.5">
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-copilot-muted">
+                Mic &amp; levels
+              </div>
+              <p className="mb-2 text-[10px] leading-snug text-copilot-muted">
+                {includeMeetTabAudio && sttSystemAudioOnly ? (
+                  <>
+                    <strong className="text-slate-400">System-only</strong> — mic
+                    gain and device are ignored. Adjust{' '}
+                    <strong className="text-slate-400">tab gain</strong> if STT is
+                    too quiet or loud.
+                  </>
+                ) : capabilities.platform === 'win32' && includeMeetTabAudio ? (
+                  <>
+                    With <strong className="text-slate-400">Meet + system audio</strong>, STT
+                    hears the same mix as your default output (headphones or
+                    speakers). Use mic / tab gain to balance your voice vs remote.
+                  </>
+                ) : (
+                  <>
+                    Without system capture,{' '}
+                    <strong className="text-slate-400">speaker</strong> volume may not match
+                    what is sent to STT. Use mic / tab gain to tune levels. Plugging
+                    headphones can switch the default mic — pick it below or restart
+                    STT after a device change.
+                  </>
+                )}
+              </p>
+              <label className="mb-2 flex cursor-pointer items-start gap-2">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={headsetMode}
+                  disabled={includeMeetTabAudio && sttSystemAudioOnly}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    localStorage.setItem(HEADSET_MODE_STORAGE, on ? '1' : '0');
+                    setHeadsetMode(on);
+                  }}
+                />
+                <span className="text-[11px] leading-snug text-slate-200">
+                  <span className="font-medium">Headset / earbuds mode</span>
+                  <span className="mt-0.5 block text-copilot-muted">
+                    Disables mic echo cancellation and auto gain for clearer
+                    transcription with headphones.
+                  </span>
+                </span>
+              </label>
+              <div className="mb-2 flex flex-wrap items-end gap-2">
+                <label className="min-w-0 flex-1 text-[10px] text-copilot-muted">
+                  Microphone
+                  <select
+                    value={micDeviceId}
+                    disabled={includeMeetTabAudio && sttSystemAudioOnly}
+                    onChange={(e) => {
+                      const id = e.target.value;
+                      localStorage.setItem(MIC_DEVICE_STORAGE, id);
+                      setMicDeviceId(id);
+                    }}
+                    className="mt-0.5 w-full rounded-md border border-copilot-border bg-copilot-bg px-2 py-1.5 text-[11px] text-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <option value="">Default (follows Windows)</option>
+                    {micDevices.map((d) => (
+                      <option key={d.deviceId} value={d.deviceId}>
+                        {d.label || `Input ${d.deviceId.slice(0, 8)}…`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  disabled={includeMeetTabAudio && sttSystemAudioOnly}
+                  onClick={() => void refreshMicDevices()}
+                  className="shrink-0 rounded-md border border-copilot-border px-2 py-1.5 text-[10px] text-slate-300 hover:bg-copilot-surface disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Refresh list
+                </button>
+              </div>
+              <div className="mb-2 flex items-center gap-2">
+                <span className="w-16 shrink-0 text-[9px] text-copilot-muted">
+                  Mic gain
+                </span>
+                <input
+                  type="range"
+                  min={0.25}
+                  max={2}
+                  step={0.05}
+                  value={micGain}
+                  disabled={includeMeetTabAudio && sttSystemAudioOnly}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    localStorage.setItem(MIC_GAIN_STORAGE, String(v));
+                    setMicGain(v);
+                  }}
+                  className="h-1.5 min-w-0 flex-1 cursor-pointer accent-copilot-accent"
+                />
+                <span className="w-10 shrink-0 text-right text-[10px] tabular-nums text-slate-300">
+                  {Math.round(micGain * 100)}%
+                </span>
+              </div>
+              {includeMeetTabAudio ? (
+                <div className="flex items-center gap-2">
+                  <span className="w-16 shrink-0 text-[9px] text-copilot-muted">
+                    Tab gain
+                  </span>
+                  <input
+                    type="range"
+                    min={0.25}
+                    max={2}
+                    step={0.05}
+                    value={tabGain}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      localStorage.setItem(TAB_GAIN_STORAGE, String(v));
+                      setTabGain(v);
+                    }}
+                    className="h-1.5 min-w-0 flex-1 cursor-pointer accent-copilot-accent"
+                  />
+                  <span className="w-10 shrink-0 text-right text-[10px] tabular-nums text-slate-300">
+                    {Math.round(tabGain * 100)}%
+                  </span>
+                </div>
+              ) : null}
+            </div>
+
+            {deviceChangeHint ? (
+              <div className="rounded-lg border border-amber-800/50 bg-amber-950/30 p-2 text-[10px] text-amber-100">
+                Audio devices changed while STT was on. Stop STT, confirm the
+                microphone above, then start again.
+              </div>
+            ) : null}
 
             <div className="flex flex-wrap gap-2">
               <button
@@ -472,7 +748,9 @@ export default function App() {
                 {sttRunning
                   ? 'Stop STT'
                   : includeMeetTabAudio
-                    ? 'Start STT + tab'
+                    ? capabilities.platform === 'win32'
+                      ? 'Start STT + system'
+                      : 'Start STT + tab'
                     : 'Start mic STT'}
               </button>
               <button

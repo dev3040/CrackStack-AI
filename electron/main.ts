@@ -1,9 +1,11 @@
 import {
   app,
   BrowserWindow,
+  desktopCapturer,
   globalShortcut,
   ipcMain,
   screen,
+  session,
 } from 'electron';
 import path from 'node:path';
 import dotenv from 'dotenv';
@@ -108,6 +110,51 @@ function broadcastTranscript(ev: TranscriptEvent) {
   overlay.webContents.send('copilot:transcript', ev);
 }
 
+/**
+ * Windows: Chromium/Electron often returns **no audio track** from getDisplayMedia.
+ * Route display-capture through desktopCapturer + WASAPI **loopback** so Meet/browser
+ * audio on the default playback device is included (follows what you hear on speakers/headphones).
+ * @see https://www.electronjs.org/docs/latest/api/session#sessetdisplaymediarequesthandlerhandler-opts
+ */
+function installDisplayMediaHandler() {
+  if (process.platform !== 'win32') return;
+
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    void (async () => {
+      try {
+        const sources = await desktopCapturer.getSources({
+          types: ['screen', 'window'],
+          thumbnailSize: { width: 1, height: 1 },
+          fetchWindowIcons: false,
+        });
+
+        const screenSources = sources.filter((s) => s.id.startsWith('screen:'));
+        const primary = screen.getPrimaryDisplay();
+        const video =
+          screenSources.find(
+            (s) =>
+              s.display_id !== '' &&
+              s.display_id === String(primary.id),
+          ) ?? screenSources[0] ?? sources[0];
+
+        if (!video) {
+          callback({});
+          return;
+        }
+
+        const streams: { video: Electron.DesktopCapturerSource; audio?: 'loopback' } =
+          { video };
+        if (request.audioRequested) {
+          streams.audio = 'loopback';
+        }
+        callback(streams);
+      } catch {
+        callback({});
+      }
+    })();
+  });
+}
+
 function createOverlayWindow() {
   const { workArea } = screen.getPrimaryDisplay();
   overlay = new BrowserWindow({
@@ -196,6 +243,7 @@ function setupIpc() {
       captureShieldDefault:
         String(process.env.CONTENT_PROTECTION ?? 'true').toLowerCase() !==
         'false',
+      platform: process.platform,
     };
   });
 
@@ -297,6 +345,7 @@ function setupIpc() {
 }
 
 app.whenReady().then(() => {
+  installDisplayMediaHandler();
   setupIpc();
   createOverlayWindow();
   registerShortcuts();

@@ -81,6 +81,11 @@ Copy `.env.example` → `.env`. Common options:
 | `LLM_CODE_MAX_TOKENS` | No | Max tokens for the **plain-text code** step (second call) |
 | `LLM_CHAT_MAX_TOKENS` | No | Max tokens for **Chat with AI** (default 3072) |
 | `DEEPGRAM_API_KEY` | No | Enables live STT; without it, use manual paste in Tools |
+| `DEEPGRAM_MODEL` | No | Default `nova-3` (accuracy). For classic multi-speaker calls try `nova-2-meeting` |
+| `DEEPGRAM_LANGUAGE` | No | Default `en`; use `multi` only with a multilingual model (see Deepgram docs) |
+| `DEEPGRAM_ENDPOINTING` | No | Ms silence before phrase end (default `550`; raise if words get cut off) |
+| `DEEPGRAM_KEYTERMS` | No | Comma-separated jargon / names — boosts recognition (Nova-3: keyterms; Nova-2: keywords) |
+| `DEEPGRAM_SMART_FORMAT` | No | Set `false` if formatted numbers/dates look wrong in transcripts |
 | `CONTENT_PROTECTION` | No | `false` disables “hide from screen capture” (debug) |
 | `SHOW_IN_TASKBAR` | No | `true` shows the app on the **Windows taskbar** (default: hidden) |
 

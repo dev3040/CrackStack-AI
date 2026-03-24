@@ -34,12 +34,20 @@ type State = {
 
 const MAX_SUMMARY = 6000;
 
+function guessRendererPlatform(): NodeJS.Platform {
+  if (typeof navigator === 'undefined') return 'linux';
+  if (/Windows/i.test(navigator.userAgent)) return 'win32';
+  if (/Macintosh|Mac OS X/i.test(navigator.userAgent)) return 'darwin';
+  return 'linux';
+}
+
 export const useCopilotStore = create<State>((set) => ({
   capabilities: {
     aiReady: false,
     aiProvider: null,
     hasDeepgram: false,
     captureShieldDefault: true,
+    platform: guessRendererPlatform(),
   },
   interactionMode: false,
   sttRunning: false,

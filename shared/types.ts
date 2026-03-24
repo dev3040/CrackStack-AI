@@ -42,6 +42,8 @@ export type AppCapabilities = {
   hasDeepgram: boolean;
   /** Default “hide from screen capture” when no localStorage override exists */
   captureShieldDefault: boolean;
+  /** From Electron `process.platform` (e.g. win32 uses system-audio loopback for Meet mode). */
+  platform: NodeJS.Platform;
 };
 
 /** Freeform chat with the model (renderer keeps history). */
