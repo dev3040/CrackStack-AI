@@ -8,6 +8,13 @@ body,
   height: 100%;
 }
 
+/* Fills unpainted pixels when window opacity is ~100% (Electron transparent frame). */
+html.copilot-solid,
+html.copilot-solid body,
+html.copilot-solid #root {
+  background-color: #0c0d10;
+}
+
 /* Electron draggable chrome */
 .drag-region {
   -webkit-app-region: drag;

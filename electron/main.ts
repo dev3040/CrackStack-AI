@@ -29,18 +29,51 @@ let llmCache: LlmConfig | null = null;
 let captureShieldEnabled =
   String(process.env.CONTENT_PROTECTION ?? 'true').toLowerCase() !== 'false';
 
+/** Whole-window opacity (0.15–1). Separate from CSS; adjusted via Tools slider. */
+let overlayUserOpacity = 1;
+
+function clampOverlayOpacity(v: number): number {
+  if (!Number.isFinite(v)) return 1;
+  return Math.min(1, Math.max(0.15, v));
+}
+
+/** Match renderer `copilot.bg` — opaque ARGB so transparent windows don’t show the desktop through gaps. */
+const OVERLAY_SOLID_BG = '#FF0c0d10';
+const OVERLAY_CLEAR_BG = '#00000000';
+
+function isSolidOverlayOpacity(o: number): boolean {
+  return clampOverlayOpacity(o) >= 0.99;
+}
+
+function syncOverlayNativeBackdrop(win: BrowserWindow | null) {
+  if (!win || win.isDestroyed()) return;
+  try {
+    win.setBackgroundColor(
+      isSolidOverlayOpacity(overlayUserOpacity)
+        ? OVERLAY_SOLID_BG
+        : OVERLAY_CLEAR_BG,
+    );
+  } catch {
+    /* unsupported */
+  }
+}
+
 /**
  * Maps to OS capture exclusion (Windows: WDA_EXCLUDEFROMCAPTURE on recent builds;
  * macOS: non-shared window). Reapplied on show/load because some drivers drop it.
+ * Keeps user window opacity (does not force 1.0).
  */
 function applyCaptureShield(win: BrowserWindow | null) {
   if (!win || win.isDestroyed()) return;
   try {
+    const o = clampOverlayOpacity(overlayUserOpacity);
+    syncOverlayNativeBackdrop(win);
     if (captureShieldEnabled) {
-      win.setOpacity(1.0);
+      win.setOpacity(o);
       win.setContentProtection(true);
     } else {
       win.setContentProtection(false);
+      win.setOpacity(o);
     }
   } catch {
     /* unsupported platform / headless */
@@ -181,6 +214,18 @@ function setupIpc() {
   });
 
   ipcMain.handle('overlay:getInteraction', () => interactionMode);
+
+  ipcMain.handle('overlay:setOpacity', (_e, raw: unknown) => {
+    const n = typeof raw === 'number' ? raw : parseFloat(String(raw));
+    overlayUserOpacity = clampOverlayOpacity(n);
+    if (overlay && !overlay.isDestroyed()) {
+      syncOverlayNativeBackdrop(overlay);
+      overlay.setOpacity(overlayUserOpacity);
+    }
+    return { ok: true as const, opacity: overlayUserOpacity };
+  });
+
+  ipcMain.handle('overlay:getOpacity', () => clampOverlayOpacity(overlayUserOpacity));
 
   ipcMain.handle('window:hide', () => {
     overlay?.hide();

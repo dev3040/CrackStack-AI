@@ -1,8 +1,8 @@
 import type { CopilotAnswer } from '../../shared/types';
 
-type Props = { answer: CopilotAnswer };
+type Props = { answer: CopilotAnswer; solidChrome?: boolean };
 
-export function AnswerCard({ answer }: Props) {
+export function AnswerCard({ answer, solidChrome = false }: Props) {
   return (
     <div className="space-y-5 text-base text-slate-200">
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-copilot-muted">
@@ -26,7 +26,11 @@ export function AnswerCard({ answer }: Props) {
           <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-copilot-muted">
             Code
           </h3>
-          <pre className="max-h-[min(78vh,44rem)] overflow-auto rounded-xl border border-copilot-border bg-black/50 p-4 font-mono text-[13px] leading-relaxed text-cyan-100">
+          <pre
+            className={`max-h-[min(78vh,44rem)] overflow-auto rounded-xl border border-copilot-border p-4 font-mono text-[13px] leading-relaxed text-cyan-100 ${
+              solidChrome ? 'bg-[#060708]' : 'bg-black/50'
+            }`}
+          >
             {answer.codeSnippet}
           </pre>
         </section>

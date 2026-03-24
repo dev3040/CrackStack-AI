@@ -24,6 +24,8 @@ export type CopilotApi = {
   ) => Promise<{ ok: true; text: string } | { ok: false; error: string }>;
   overlaySetInteraction: (enabled: boolean) => Promise<boolean>;
   overlayGetInteraction: () => Promise<boolean>;
+  overlaySetOpacity: (opacity: number) => Promise<{ ok: true; opacity: number }>;
+  overlayGetOpacity: () => Promise<number>;
   onTranscript: (cb: (ev: TranscriptEvent) => void) => () => void;
   onSttError: (cb: (message: string) => void) => () => void;
   onInteraction: (cb: (enabled: boolean) => void) => () => void;
@@ -42,6 +44,9 @@ const api: CopilotApi = {
   overlaySetInteraction: (enabled) =>
     ipcRenderer.invoke('overlay:setInteraction', enabled),
   overlayGetInteraction: () => ipcRenderer.invoke('overlay:getInteraction'),
+  overlaySetOpacity: (opacity) =>
+    ipcRenderer.invoke('overlay:setOpacity', opacity),
+  overlayGetOpacity: () => ipcRenderer.invoke('overlay:getOpacity'),
   onTranscript: (cb) => {
     const handler = (_: IpcRendererEvent, ev: TranscriptEvent) => cb(ev);
     ipcRenderer.on('copilot:transcript', handler);

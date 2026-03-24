@@ -12,6 +12,8 @@ type AiResult =
   | { ok: true; answer: CopilotAnswer }
   | { ok: false; error: string };
 
+type ChatResult = { ok: true; text: string } | { ok: false; error: string };
+
 declare global {
   interface Window {
     copilotApi: {
@@ -25,6 +27,10 @@ declare global {
       aiChat: (payload: { messages: ChatTurn[] }) => Promise<ChatResult>;
       overlaySetInteraction: (enabled: boolean) => Promise<boolean>;
       overlayGetInteraction: () => Promise<boolean>;
+      overlaySetOpacity: (
+        opacity: number,
+      ) => Promise<{ ok: true; opacity: number }>;
+      overlayGetOpacity: () => Promise<number>;
       onTranscript: (cb: (ev: TranscriptEvent) => void) => () => void;
       onSttError: (cb: (message: string) => void) => () => void;
       onInteraction: (cb: (enabled: boolean) => void) => () => void;

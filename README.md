@@ -11,6 +11,7 @@ A transparent **Electron overlay** for technical interview prep and live session
 | Area | What you get |
 |------|----------------|
 | **Overlay** | Frameless, always-on-top, dark UI, resizable, wide layout for answers |
+| **Opacity** | **Window opacity** slider under the title bar (and in **Tools**): 15–100% via Electron `setOpacity`; persisted in `localStorage` |
 | **Stealth** | Click-through by default (`Interact` / **Alt+Shift+I** to click); optional **hide from screen capture**; **hidden from Windows taskbar** by default |
 | **STT** | Microphone → **Deepgram** live streaming (optional `DEEPGRAM_API_KEY`) |
 | **Meet / tab audio** | Optional: share the **Chrome tab** with Meet and enable **Share tab audio** so remote voices are captured while using headphones |
@@ -91,6 +92,7 @@ Copy `.env.example` → `.env`. Common options:
 
 ### Main layout
 
+- **Window opacity** — Bar directly under the title: drag **Ghost → Solid** to make the whole overlay more see-through or **100%** for easiest reading (chat + answers). Uses **Interact** mode to drag the slider when click-through is on.
 - **Live** — Current STT line; red dot when STT is running. **Clear conversation** clears session transcript, manual notes, structured answer, and related state (does not stop STT by itself).
 - **Center** — Large **session answer** (interview-style structured card).
 - **Bottom** — **Chat with AI** (Enter to send, Shift+Enter for newline). **Clear chat** in the chat header clears only that thread.

@@ -2,25 +2,35 @@ import type { ReactNode } from 'react';
 
 type Props = {
   open: boolean;
+  solidChrome?: boolean;
   onClose: () => void;
   children: ReactNode;
 };
 
-export function ToolsDrawer({ open, onClose, children }: Props) {
+export function ToolsDrawer({
+  open,
+  solidChrome = false,
+  onClose,
+  children,
+}: Props) {
   return (
     <>
       {open ? (
         <button
           type="button"
-          className="no-drag absolute inset-0 z-40 bg-black/45 transition-opacity"
+          className={`no-drag absolute inset-0 z-40 transition-opacity ${
+            solidChrome ? 'bg-copilot-bg' : 'bg-black/45'
+          }`}
           aria-label="Close tools"
           onClick={onClose}
         />
       ) : null}
       <aside
-        className={`no-drag absolute right-0 top-0 z-50 flex h-full w-[min(100%,20.5rem)] flex-col border-l border-copilot-border bg-copilot-bg/98 shadow-2xl backdrop-blur-md transition-transform duration-200 ease-out ${
-          open ? 'translate-x-0' : 'pointer-events-none translate-x-full'
-        }`}
+        className={`no-drag absolute right-0 top-0 z-50 flex h-full w-[min(100%,20.5rem)] flex-col border-l border-copilot-border shadow-2xl transition-transform duration-200 ease-out ${
+          solidChrome
+            ? 'bg-copilot-bg'
+            : 'bg-copilot-bg/98 backdrop-blur-md'
+        } ${open ? 'translate-x-0' : 'pointer-events-none translate-x-full'}`}
         aria-hidden={!open}
       >
         <div className="flex items-center justify-between border-b border-copilot-border px-3 py-2.5">

@@ -14,6 +14,19 @@ const api = window.copilotApi;
 
 const CAPTURE_SHIELD_STORAGE = 'copilot.captureShield';
 const MEET_TAB_AUDIO_STORAGE = 'copilot.includeMeetTabAudio';
+const OVERLAY_OPACITY_STORAGE = 'copilot.overlayOpacity';
+
+function clampUiOpacity(v: number): number {
+  if (!Number.isFinite(v)) return 1;
+  return Math.min(1, Math.max(0.15, v));
+}
+
+function readStoredOpacity(): number {
+  if (typeof localStorage === 'undefined') return 1;
+  return clampUiOpacity(
+    parseFloat(localStorage.getItem(OVERLAY_OPACITY_STORAGE) ?? '1'),
+  );
+}
 
 function formatAnswerForClipboard(a: {
   shortAnswer: string;
@@ -57,6 +70,14 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<ChatTurn[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [chatBusy, setChatBusy] = useState(false);
+  const [overlayOpacity, setOverlayOpacity] = useState(() => readStoredOpacity());
+
+  const applyOverlayOpacity = (raw: number) => {
+    const v = clampUiOpacity(raw);
+    setOverlayOpacity(v);
+    localStorage.setItem(OVERLAY_OPACITY_STORAGE, String(v));
+    void api.overlaySetOpacity(v);
+  };
 
   const {
     capabilities,
@@ -146,6 +167,18 @@ export default function App() {
       setError(res.error);
     }
   };
+
+  useEffect(() => {
+    const v = readStoredOpacity();
+    setOverlayOpacity(v);
+    void api.overlaySetOpacity(v);
+  }, []);
+
+  useEffect(() => {
+    const solid = Math.round(overlayOpacity * 100) >= 99;
+    document.documentElement.classList.toggle('copilot-solid', solid);
+    return () => document.documentElement.classList.remove('copilot-solid');
+  }, [overlayOpacity]);
 
   useEffect(() => {
     void api.capabilities().then((c) => {
@@ -287,18 +320,57 @@ export default function App() {
     setChatInput('');
   };
 
+  /** Slider ≥99%: opaque CSS panels (no /94 alpha, no backdrop blur) so the desktop doesn’t show through. */
+  const solidChrome = Math.round(overlayOpacity * 100) >= 99;
+
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-xl border border-copilot-border bg-copilot-bg/94 text-slate-200 shadow-2xl backdrop-blur-md">
+    <div
+      className={`flex h-full flex-col overflow-hidden rounded-xl border border-copilot-border text-slate-200 shadow-2xl ${
+        solidChrome
+          ? 'bg-copilot-bg'
+          : 'bg-copilot-bg/94 backdrop-blur-md'
+      }`}
+    >
       <TitleBar
         interactionMode={interactionMode}
         toolsOpen={toolsOpen}
+        solidChrome={solidChrome}
         onToggleInteraction={() => void toggleInteraction()}
         onToggleTools={() => setToolsOpen((o) => !o)}
         onMinimize={() => void api.windowHide()}
       />
 
+      <div
+        className={`no-drag flex items-center gap-3 border-b border-copilot-border/60 px-3 py-1.5 ${
+          solidChrome ? 'bg-copilot-surface' : 'bg-copilot-surface/40'
+        }`}
+      >
+        <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-copilot-muted">
+          Window opacity
+        </span>
+        <span className="shrink-0 text-[9px] text-copilot-muted">Ghost</span>
+        <input
+          type="range"
+          min={0.15}
+          max={1}
+          step={0.05}
+          value={overlayOpacity}
+          onChange={(e) => applyOverlayOpacity(parseFloat(e.target.value))}
+          className="h-1.5 min-w-0 flex-1 cursor-pointer accent-copilot-accent"
+          title="Whole overlay transparency (Electron). Higher = easier to read chat."
+        />
+        <span className="shrink-0 text-[9px] text-copilot-muted">Solid</span>
+        <span className="w-9 shrink-0 text-right text-[10px] tabular-nums text-slate-300">
+          {Math.round(overlayOpacity * 100)}%
+        </span>
+      </div>
+
       <div className="relative flex min-h-0 flex-1 flex-col">
-        <ToolsDrawer open={toolsOpen} onClose={() => setToolsOpen(false)}>
+        <ToolsDrawer
+          open={toolsOpen}
+          solidChrome={solidChrome}
+          onClose={() => setToolsOpen(false)}
+        >
           <div className="flex flex-col gap-4 text-[11px]">
             <div className="flex flex-wrap gap-2">
               <span
@@ -315,6 +387,34 @@ export default function App() {
             <p className="leading-relaxed text-copilot-muted">
               Alt+Shift+O hide window · Alt+Shift+I interact / click-through
             </p>
+
+            <div className="rounded-lg border border-copilot-border/80 bg-copilot-surface/30 p-2.5">
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-copilot-muted">
+                Window opacity (same as top bar)
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] text-copilot-muted">15%</span>
+                <input
+                  type="range"
+                  min={0.15}
+                  max={1}
+                  step={0.05}
+                  value={overlayOpacity}
+                  onChange={(e) =>
+                    applyOverlayOpacity(parseFloat(e.target.value))
+                  }
+                  className="h-1.5 min-w-0 flex-1 cursor-pointer accent-copilot-accent"
+                />
+                <span className="text-[9px] text-copilot-muted">100%</span>
+                <span className="w-8 text-right text-[10px] tabular-nums text-slate-300">
+                  {Math.round(overlayOpacity * 100)}%
+                </span>
+              </div>
+              <p className="mt-1.5 text-[10px] leading-snug text-copilot-muted">
+                Controls the whole window so you can see the desktop through it
+                or make text more readable at 100%.
+              </p>
+            </div>
 
             <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-copilot-border/80 bg-copilot-surface/40 p-2.5">
               <input
@@ -491,7 +591,11 @@ export default function App() {
         </ToolsDrawer>
 
         <div className="no-drag flex min-h-0 flex-1 flex-col">
-          <div className="flex shrink-0 items-center gap-3 border-b border-copilot-border/70 bg-copilot-surface/30 px-4 py-2.5">
+          <div
+            className={`flex shrink-0 items-center gap-3 border-b border-copilot-border/70 px-4 py-2.5 ${
+              solidChrome ? 'bg-copilot-surface' : 'bg-copilot-surface/30'
+            }`}
+          >
             <span className="text-[10px] font-bold uppercase tracking-wider text-copilot-muted">
               Live
             </span>
@@ -513,15 +617,21 @@ export default function App() {
               type="button"
               onClick={clearConversation}
               title="Clear transcript, manual notes, and session answer"
-              className="no-drag shrink-0 rounded-lg border border-copilot-border/90 bg-copilot-bg/80 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400 hover:border-rose-800/60 hover:bg-rose-950/30 hover:text-rose-200"
+              className={`no-drag shrink-0 rounded-lg border border-copilot-border/90 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400 hover:border-rose-800/60 hover:bg-rose-950/30 hover:text-rose-200 ${
+                solidChrome ? 'bg-copilot-surface' : 'bg-copilot-bg/80'
+              }`}
             >
               Clear conversation
             </button>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <div
+            className={`min-h-0 flex-1 overflow-y-auto px-5 py-4 ${
+              solidChrome ? 'bg-copilot-bg' : ''
+            }`}
+          >
             {answer ? (
-              <AnswerCard answer={answer} />
+              <AnswerCard answer={answer} solidChrome={solidChrome} />
             ) : (
               <div className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-3 text-center">
                 <p className="max-w-md text-lg font-medium text-slate-400">
@@ -549,6 +659,7 @@ export default function App() {
             onInputChange={setChatInput}
             onSend={() => void handleSendChat()}
             onClearChat={clearChatOnly}
+            solidChrome={solidChrome}
             busy={chatBusy}
             disabled={!capabilities.aiReady}
           />

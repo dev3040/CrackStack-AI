@@ -7,6 +7,7 @@ type Props = {
   onInputChange: (v: string) => void;
   onSend: () => void;
   onClearChat?: () => void;
+  solidChrome?: boolean;
   busy: boolean;
   disabled: boolean;
 };
@@ -17,6 +18,7 @@ export function ChatDock({
   onInputChange,
   onSend,
   onClearChat,
+  solidChrome = false,
   busy,
   disabled,
 }: Props) {
@@ -26,7 +28,11 @@ export function ChatDock({
   }, [messages.length, busy]);
 
   return (
-    <div className="flex shrink-0 flex-col border-t border-copilot-border bg-copilot-bg/90">
+    <div
+      className={`flex shrink-0 flex-col border-t border-copilot-border ${
+        solidChrome ? 'bg-copilot-bg' : 'bg-copilot-bg/90'
+      }`}
+    >
       <div className="flex items-center justify-between gap-2 px-4 pt-2">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-copilot-muted">
           Chat with AI
@@ -53,8 +59,12 @@ export function ChatDock({
               key={`${i}-${m.content.slice(0, 12)}`}
               className={`mb-2 rounded-xl px-3 py-2.5 text-sm leading-relaxed ${
                 m.role === 'user'
-                  ? 'ml-6 border border-copilot-accent/25 bg-copilot-accent/10 text-slate-100'
-                  : 'mr-6 border border-copilot-border/80 bg-copilot-surface/90 text-slate-200'
+                  ? solidChrome
+                    ? 'ml-6 border border-copilot-accent/50 bg-copilot-surface text-slate-100'
+                    : 'ml-6 border border-copilot-accent/25 bg-copilot-accent/10 text-slate-100'
+                  : solidChrome
+                    ? 'mr-6 border border-copilot-border bg-copilot-surface text-slate-200'
+                    : 'mr-6 border border-copilot-border/80 bg-copilot-surface/90 text-slate-200'
               }`}
             >
               <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-copilot-muted">
@@ -79,7 +89,9 @@ export function ChatDock({
           rows={2}
           placeholder="Message… Enter send · Shift+Enter new line"
           disabled={disabled || busy}
-          className="min-h-[48px] flex-1 resize-none rounded-xl border border-copilot-border bg-copilot-surface/95 px-3 py-2.5 text-sm text-slate-100 placeholder:text-copilot-muted focus:border-copilot-accent/50 focus:outline-none"
+          className={`min-h-[48px] flex-1 resize-none rounded-xl border border-copilot-border px-3 py-2.5 text-sm text-slate-100 placeholder:text-copilot-muted focus:border-copilot-accent/50 focus:outline-none ${
+            solidChrome ? 'bg-copilot-surface' : 'bg-copilot-surface/95'
+          }`}
         />
         <button
           type="button"

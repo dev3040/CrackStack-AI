@@ -1,6 +1,8 @@
 type Props = {
   interactionMode: boolean;
   toolsOpen: boolean;
+  /** Solid fills when window opacity slider is ~100% */
+  solidChrome?: boolean;
   onToggleInteraction: () => void;
   onToggleTools: () => void;
   onMinimize: () => void;
@@ -9,12 +11,17 @@ type Props = {
 export function TitleBar({
   interactionMode,
   toolsOpen,
+  solidChrome = false,
   onToggleInteraction,
   onToggleTools,
   onMinimize,
 }: Props) {
   return (
-    <header className="drag-region flex shrink-0 items-center justify-between gap-2 border-b border-copilot-border bg-copilot-surface/95 px-3 py-2 text-xs text-copilot-muted">
+    <header
+      className={`drag-region flex shrink-0 items-center justify-between gap-2 border-b border-copilot-border px-3 py-2 text-xs text-copilot-muted ${
+        solidChrome ? 'bg-copilot-surface' : 'bg-copilot-surface/95'
+      }`}
+    >
       <div className="flex flex-col">
         <span className="text-sm font-semibold text-slate-100">
           Interview Copilot
