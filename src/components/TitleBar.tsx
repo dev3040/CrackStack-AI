@@ -24,7 +24,7 @@ export function TitleBar({
     >
       <div className="flex flex-col">
         <span className="text-sm font-semibold text-slate-100">
-          Interview Copilot
+          CrackStack AI
         </span>
         <span className="text-[10px]">
           {interactionMode

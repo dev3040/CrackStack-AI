@@ -21,7 +21,7 @@ export type LlmConfig = {
   provider: 'groq' | 'openrouter' | 'openai';
 };
 
-const SYSTEM_PROMPT = `You are Interview Copilot. Given interview dialogue, produce interview-ready help.
+const SYSTEM_PROMPT = `You are CrackStack AI. Given interview dialogue, produce interview-ready help.
 
 Rules:
 - Return ONLY valid JSON matching the schema in the user message (one JSON object, no markdown outside it).
@@ -31,7 +31,7 @@ Rules:
 - Escape newlines inside JSON strings as \\n.`;
 
 /** Phase 1 (coding): JSON without code body — code comes from a second request. */
-const SYSTEM_PROMPT_CODING_META = `You are Interview Copilot. Return ONE JSON object only.
+const SYSTEM_PROMPT_CODING_META = `You are CrackStack AI. Return ONE JSON object only.
 
 Rules:
 - shortAnswer: 2–4 sentences of plain English ONLY. No code, no { }, no "function" lines, no semicolon-terminated program lines.
@@ -308,7 +308,7 @@ export function resolveLlmConfig(): LlmConfig {
         defaultHeaders: {
           'HTTP-Referer':
             process.env.OPENROUTER_HTTP_REFERER?.trim() || 'http://localhost',
-          'X-Title': 'Interview Copilot',
+          'X-Title': 'CrackStack AI',
         },
       }),
       model:
@@ -439,7 +439,7 @@ async function generateStructuredAnswerSingleShot(
   }
 }
 
-const CHAT_SYSTEM = `You are Interview Copilot — a sharp, practical technical interview coach.
+const CHAT_SYSTEM = `You are CrackStack AI — a sharp, practical technical interview coach.
 - Answer clearly so the user can reuse ideas in a live interview.
 - Use markdown when useful: short headings, bullets, and fenced code blocks for snippets.
 - Stay honest; if unsure, say what to clarify or how to reason about it.

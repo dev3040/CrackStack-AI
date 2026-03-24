@@ -1,4 +1,4 @@
-# Interview Copilot — Architecture & Delivery
+# CrackStack AI — Architecture & Delivery
 
 ## 1. Desktop framework: Electron vs Tauri
 
