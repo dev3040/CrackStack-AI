@@ -183,7 +183,3 @@ More detail: **[ARCHITECTURE.md](./ARCHITECTURE.md)** (Electron vs Tauri, data f
 - **Taskbar:** Set `SHOW_IN_TASKBAR=true` if you need the icon while debugging.
 
 ---
-
-## License
-
-No license file is bundled by default. Add one (e.g. MIT) if you publish or distribute the project.
