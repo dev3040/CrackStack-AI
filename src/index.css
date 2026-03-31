@@ -23,3 +23,37 @@ html.copilot-solid #root {
 .no-drag {
   -webkit-app-region: no-drag;
 }
+
+/*
+ * App-wide: never use the hand/pointer cursor. Tailwind’s `.cursor-pointer` and
+ * browser defaults on links/buttons otherwise win depending on build order.
+ */
+html *,
+html *::before,
+html *::after {
+  cursor: default !important;
+}
+
+input[type="text"],
+input[type="search"],
+input[type="email"],
+input[type="password"],
+input[type="url"],
+input[type="tel"],
+input[type="number"],
+input[type="date"],
+input[type="datetime-local"],
+input[type="time"],
+input[type="month"],
+input[type="week"],
+input:not([type]),
+textarea,
+[contenteditable="true"] {
+  cursor: text !important;
+}
+
+:where(button, input, select, textarea, fieldset):disabled,
+[disabled],
+[aria-disabled="true"] {
+  cursor: not-allowed !important;
+}
