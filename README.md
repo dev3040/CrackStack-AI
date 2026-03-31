@@ -6,6 +6,12 @@ A transparent **Electron overlay** for technical interview prep and live session
 
 ---
 
+## Demo
+
+**[Watch the demo video →](https://drive.google.com/file/d/15AE_4YR7mfCAElWrxUZWVt1cOCWI5Vf8/view?usp=sharing)** (Google Drive)
+
+---
+
 ## Features
 
 | Area | What you get |
