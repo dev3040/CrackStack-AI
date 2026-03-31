@@ -7,10 +7,7 @@ A transparent **Electron overlay** for technical interview prep and live session
 ---
 
 ## Demo
-
-<video src="docs/demo.mp4" controls width="100%" playsinline></video>
-
-Same recording on Google Drive: **[open in Drive](https://drive.google.com/file/d/15AE_4YR7mfCAElWrxUZWVt1cOCWI5Vf8/view?usp=sharing)**. To update the in-repo player, replace **`docs/demo.mp4`** and commit (use [Git LFS](https://git-lfs.com/) if the file grows large).
+https://github.com/user-attachments/assets/c33ddb59-1d80-477b-8f65-d26eb7ee9c58
 
 ---
 
