@@ -340,67 +340,147 @@ export default function App() {
     setLiveLine,
   ]);
 
+  const stopSttInner = useCallback(async () => {
+    if (silenceGenTimerRef.current) {
+      clearTimeout(silenceGenTimerRef.current);
+      silenceGenTimerRef.current = null;
+    }
+    questionBurstRef.current = '';
+    await stopCaptureRef.current?.();
+    stopCaptureRef.current = null;
+    await api.sttStop();
+    setSttRunning(false);
+  }, [setSttRunning]);
+
+  const beginSttCapture = useCallback(
+    async (opts: {
+      includeMeetTabAudio: boolean;
+      systemAudioOnly: boolean;
+    }) => {
+      setError(null);
+      setAudioHint(null);
+      if (!capabilities.hasDeepgram) {
+        setError('Add DEEPGRAM_API_KEY to .env for live STT.');
+        return;
+      }
+
+      setIncludeMeetTabAudio(opts.includeMeetTabAudio);
+      localStorage.setItem(
+        MEET_TAB_AUDIO_STORAGE,
+        opts.includeMeetTabAudio ? '1' : '0',
+      );
+      setSttSystemAudioOnly(opts.systemAudioOnly);
+      localStorage.setItem(
+        STT_SYSTEM_ONLY_STORAGE,
+        opts.systemAudioOnly ? '1' : '0',
+      );
+
+      try {
+        const audioOpts = {
+          deviceId: micDeviceId || undefined,
+          micGain,
+          tabGain,
+          headsetMode,
+        };
+        const capture = opts.includeMeetTabAudio
+          ? await startMeetMixedPcmCapture((pcm) => api.sttSendPcm(pcm), {
+              ...audioOpts,
+              includeMeetTabAudio: true,
+              systemAudioOnly: opts.systemAudioOnly,
+            })
+          : await startMicPcmCapture((pcm) => api.sttSendPcm(pcm), audioOpts);
+        setDeviceChangeHint(false);
+
+        if (
+          opts.includeMeetTabAudio &&
+          !capture.hadMeetTabAudio &&
+          !opts.systemAudioOnly
+        ) {
+          setAudioHint(
+            capabilities.platform === 'win32'
+              ? 'Mic only: system audio was not attached. Allow the capture prompt, check Windows Privacy → Microphone, and ensure sound plays on your default output device.'
+              : 'Mic only: tab audio was not shared. When prompted, select the Meet tab and turn ON “Share tab audio”.',
+          );
+        }
+
+        const started = await api.sttStart({ sampleRate: capture.sampleRate });
+        if (!started.ok) {
+          await capture.stop();
+          setError(started.error);
+          return;
+        }
+        stopCaptureRef.current = capture.stop;
+        setSttRunning(true);
+      } catch (e) {
+        const name = e instanceof DOMException ? e.name : '';
+        if (name === 'NotAllowedError' || name === 'AbortError') {
+          setError(
+            'Tab/window capture was cancelled or blocked. Allow screen capture for this app, or turn off “Capture Meet tab audio”.',
+          );
+          return;
+        }
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [
+      capabilities.hasDeepgram,
+      capabilities.platform,
+      headsetMode,
+      micDeviceId,
+      micGain,
+      tabGain,
+      setError,
+      setSttRunning,
+    ],
+  );
+
   const toggleStt = async () => {
     setError(null);
     setAudioHint(null);
     if (sttRunning) {
-      if (silenceGenTimerRef.current) {
-        clearTimeout(silenceGenTimerRef.current);
-        silenceGenTimerRef.current = null;
-      }
-      questionBurstRef.current = '';
-      await stopCaptureRef.current?.();
-      stopCaptureRef.current = null;
-      await api.sttStop();
-      setSttRunning(false);
+      await stopSttInner();
       return;
     }
+    await beginSttCapture({
+      includeMeetTabAudio,
+      systemAudioOnly: sttSystemAudioOnly,
+    });
+  };
+
+  const listenSttActive =
+    sttRunning && includeMeetTabAudio && sttSystemAudioOnly;
+  const speakSttActive = sttRunning && !includeMeetTabAudio;
+
+  const onListenClick = async () => {
     if (!capabilities.hasDeepgram) {
       setError('Add DEEPGRAM_API_KEY to .env for live STT.');
       return;
     }
-    try {
-      const audioOpts = {
-        deviceId: micDeviceId || undefined,
-        micGain,
-        tabGain,
-        headsetMode,
-      };
-      const capture = includeMeetTabAudio
-        ? await startMeetMixedPcmCapture((pcm) => api.sttSendPcm(pcm), {
-            ...audioOpts,
-            includeMeetTabAudio: true,
-            systemAudioOnly: sttSystemAudioOnly,
-          })
-        : await startMicPcmCapture((pcm) => api.sttSendPcm(pcm), audioOpts);
-      setDeviceChangeHint(false);
-
-      if (includeMeetTabAudio && !capture.hadMeetTabAudio && !sttSystemAudioOnly) {
-        setAudioHint(
-          capabilities.platform === 'win32'
-            ? 'Mic only: system audio was not attached. Allow the capture prompt, check Windows Privacy → Microphone, and ensure sound plays on your default output device.'
-            : 'Mic only: tab audio was not shared. When prompted, select the Meet tab and turn ON “Share tab audio”.',
-        );
-      }
-
-      const started = await api.sttStart({ sampleRate: capture.sampleRate });
-      if (!started.ok) {
-        await capture.stop();
-        setError(started.error);
-        return;
-      }
-      stopCaptureRef.current = capture.stop;
-      setSttRunning(true);
-    } catch (e) {
-      const name = e instanceof DOMException ? e.name : '';
-      if (name === 'NotAllowedError' || name === 'AbortError') {
-        setError(
-          'Tab/window capture was cancelled or blocked. Allow screen capture for this app, or turn off “Capture Meet tab audio”.',
-        );
-        return;
-      }
-      setError(e instanceof Error ? e.message : String(e));
+    if (listenSttActive) {
+      await stopSttInner();
+      return;
     }
+    if (sttRunning) await stopSttInner();
+    await beginSttCapture({
+      includeMeetTabAudio: true,
+      systemAudioOnly: true,
+    });
+  };
+
+  const onSpeakClick = async () => {
+    if (!capabilities.hasDeepgram) {
+      setError('Add DEEPGRAM_API_KEY to .env for live STT.');
+      return;
+    }
+    if (speakSttActive) {
+      await stopSttInner();
+      return;
+    }
+    if (sttRunning) await stopSttInner();
+    await beginSttCapture({
+      includeMeetTabAudio: false,
+      systemAudioOnly: false,
+    });
   };
 
   const toggleInteraction = async () => {
@@ -870,6 +950,50 @@ export default function App() {
 
         <div className="no-drag flex min-h-0 flex-1 flex-col">
           <div
+            className={`flex shrink-0 flex-wrap items-center gap-2 border-b border-copilot-border/70 px-4 py-2 ${
+              solidChrome ? 'bg-copilot-surface/90' : 'bg-copilot-surface/25'
+            }`}
+          >
+            <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-copilot-muted">
+              STT
+            </span>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                disabled={!capabilities.hasDeepgram}
+                onClick={() => void onListenClick()}
+                title="Transcribe system / tab audio (e.g. Meet). Screen capture permission required. Click again to stop."
+                className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                  listenSttActive
+                    ? 'bg-emerald-600 text-white ring-2 ring-emerald-400/80'
+                    : 'border border-copilot-border bg-copilot-bg/80 text-slate-200 hover:bg-copilot-surface'
+                }`}
+              >
+                Listen
+              </button>
+              <button
+                type="button"
+                disabled={!capabilities.hasDeepgram}
+                onClick={() => void onSpeakClick()}
+                title="Transcribe your microphone. Click again to stop."
+                className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                  speakSttActive
+                    ? 'bg-sky-600 text-white ring-2 ring-sky-400/80'
+                    : 'border border-copilot-border bg-copilot-bg/80 text-slate-200 hover:bg-copilot-surface'
+                }`}
+              >
+                Speak
+              </button>
+            </div>
+            <p className="min-w-0 flex-1 text-[10px] leading-snug text-copilot-muted">
+              <span className="text-slate-500">Listen</span> — system / meeting
+              audio.{' '}
+              <span className="text-slate-500">Speak</span> — your mic only.
+              Only one runs at a time.
+            </p>
+          </div>
+
+          <div
             className={`flex shrink-0 items-center gap-3 border-b border-copilot-border/70 px-4 py-2.5 ${
               solidChrome ? 'bg-copilot-surface' : 'bg-copilot-surface/30'
             }`}
@@ -917,8 +1041,10 @@ export default function App() {
                   explanations.
                 </p>
                 <p className="max-w-sm text-sm text-copilot-muted">
-                  Turn on STT in Tools, or paste a question there. Use{' '}
-                  <strong className="text-slate-500">Chat</strong> below for
+                  Use <strong className="text-slate-500">Listen</strong> or{' '}
+                  <strong className="text-slate-500">Speak</strong> above for
+                  live STT, or paste a question in Tools.{' '}
+                  <strong className="text-slate-500">Chat</strong> below is for
                   freeform Q&amp;A.
                 </p>
               </div>
