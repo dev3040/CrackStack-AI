@@ -49,7 +49,7 @@ input[type="week"],
 input:not([type]),
 textarea,
 [contenteditable="true"] {
-  cursor: text !important;
+  cursor: default !important;
 }
 
 :where(button, input, select, textarea, fieldset):disabled,

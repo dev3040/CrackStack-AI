@@ -552,7 +552,6 @@ export default function App() {
           value={overlayOpacity}
           onChange={(e) => applyOverlayOpacity(parseFloat(e.target.value))}
           className="h-1.5 min-w-0 flex-1 cursor-pointer accent-copilot-accent"
-          title="Whole overlay transparency (Electron). Higher = easier to read chat."
         />
         <span className="shrink-0 text-[9px] text-copilot-muted">Solid</span>
         <span className="w-9 shrink-0 text-right text-[10px] tabular-nums text-slate-300">
@@ -962,7 +961,6 @@ export default function App() {
                 type="button"
                 disabled={!capabilities.hasDeepgram}
                 onClick={() => void onListenClick()}
-                title="Transcribe system / tab audio (e.g. Meet). Screen capture permission required. Click again to stop."
                 className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                   listenSttActive
                     ? 'bg-emerald-600 text-white ring-2 ring-emerald-400/80'
@@ -975,7 +973,6 @@ export default function App() {
                 type="button"
                 disabled={!capabilities.hasDeepgram}
                 onClick={() => void onSpeakClick()}
-                title="Transcribe your microphone. Click again to stop."
                 className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                   speakSttActive
                     ? 'bg-sky-600 text-white ring-2 ring-sky-400/80'
@@ -1007,7 +1004,6 @@ export default function App() {
             {sttRunning ? (
               <span
                 className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-red-500"
-                title="STT on"
               />
             ) : null}
             {generating ? (
@@ -1018,7 +1014,6 @@ export default function App() {
             <button
               type="button"
               onClick={clearConversation}
-              title="Clear transcript, manual notes, and session answer"
               className={`no-drag shrink-0 rounded-lg border border-copilot-border/90 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400 hover:border-rose-800/60 hover:bg-rose-950/30 hover:text-rose-200 ${
                 solidChrome ? 'bg-copilot-surface' : 'bg-copilot-bg/80'
               }`}

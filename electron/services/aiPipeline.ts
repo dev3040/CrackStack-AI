@@ -21,6 +21,21 @@ export type LlmConfig = {
   provider: 'groq' | 'openrouter' | 'openai';
 };
 
+/**
+ * Groq on-demand free tier TPM is often 6000/min; the API can reject a request when
+ * estimated prompt + max_tokens is too high. Cap output tokens so typical prompts stay under budget.
+ * Override via GROQ_MAX_OUTPUT_TOKENS (e.g. after upgrading tier at console.groq.com).
+ */
+function capMaxTokensForProvider(llm: LlmConfig, max_tokens: number): number {
+  if (llm.provider !== 'groq') return max_tokens;
+  const fromEnv = parseInt(process.env.GROQ_MAX_OUTPUT_TOKENS ?? '', 10);
+  const ceiling =
+    !Number.isNaN(fromEnv) && fromEnv >= 256
+      ? Math.min(fromEnv, 16_384)
+      : 3584;
+  return Math.min(max_tokens, ceiling);
+}
+
 const MULTI_QUESTION_HINT = `If the latest utterance contains several distinct questions in one turn, answer all of them: one shortAnswer line that covers each briefly, then detailedExplanation addressing each in order (optional light Q1/Q2 labels). If they are unrelated coding tasks, prioritize the main one in codeSnippet and mention the other in text.`;
 
 const SYSTEM_PROMPT = `You are CrackStack AI. Given interview dialogue, produce interview-ready help.
@@ -198,7 +213,7 @@ async function createCompletion(
   const base = {
     model: llm.model,
     temperature: 0.25,
-    max_tokens,
+    max_tokens: capMaxTokensForProvider(llm, max_tokens),
     messages,
   } as const;
 
@@ -248,7 +263,7 @@ ${meta.detailedExplanation}
 
 Write the complete solution now.`;
 
-  const max_tokens = maxTokensCodeOnly();
+  const max_tokens = capMaxTokensForProvider(llm, maxTokensCodeOnly());
   const completion = await llm.client.chat.completions.create({
     model: llm.model,
     temperature: 0.15,
@@ -455,10 +470,11 @@ export async function runChatCompletion(
   messages: ChatTurn[],
 ): Promise<string> {
   const fromEnv = parseInt(process.env.LLM_CHAT_MAX_TOKENS ?? '', 10);
-  const max_tokens = Math.min(
+  let max_tokens = Math.min(
     !Number.isNaN(fromEnv) && fromEnv >= 256 ? fromEnv : 3072,
     8192,
   );
+  max_tokens = capMaxTokensForProvider(llm, max_tokens);
 
   const completion = await llm.client.chat.completions.create({
     model: llm.model,

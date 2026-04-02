@@ -21,20 +21,6 @@ export function AnswerCard({ answer, solidChrome = false }: Props) {
           <span>S {answer.spaceComplexity}</span>
         ) : null}
       </div>
-      {answer.codeSnippet ? (
-        <section>
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-copilot-muted">
-            Code
-          </h3>
-          <pre
-            className={`max-h-[min(78vh,44rem)] overflow-auto rounded-xl border border-copilot-border p-4 font-mono text-[13px] leading-relaxed text-cyan-100 ${
-              solidChrome ? 'bg-[#060708]' : 'bg-black/50'
-            }`}
-          >
-            {answer.codeSnippet}
-          </pre>
-        </section>
-      ) : null}
       <section>
         <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-copilot-muted">
           Short
@@ -51,6 +37,20 @@ export function AnswerCard({ answer, solidChrome = false }: Props) {
           {answer.detailedExplanation}
         </p>
       </section>
+      {answer.codeSnippet ? (
+        <section>
+          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-copilot-muted">
+            Code
+          </h3>
+          <pre
+            className={`max-h-[min(78vh,44rem)] overflow-auto rounded-xl border border-copilot-border p-4 font-mono text-[13px] leading-relaxed text-cyan-100 ${
+              solidChrome ? 'bg-[#060708]' : 'bg-black/50'
+            }`}
+          >
+            {answer.codeSnippet}
+          </pre>
+        </section>
+      ) : null}
       {answer.edgeCases.length > 0 ? (
         <section>
           <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-copilot-muted">
