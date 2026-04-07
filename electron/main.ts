@@ -13,10 +13,12 @@ import { DeepgramLiveSession, type TranscriptEvent } from './services/deepgramLi
 import {
   generateStructuredAnswer,
   getAiCapabilitiesFromEnv,
-  resolveLlmConfig,
+  resolveAllLlmConfigs,
   runChatCompletion,
   type ChatTurn,
+  type CopilotAnswer,
   type GenerateInput,
+  type GenerateMode,
   type LlmConfig,
 } from './services/aiPipeline';
 
@@ -25,7 +27,7 @@ dotenv.config({ path: path.join(__dirname, '../../.env') });
 let overlay: BrowserWindow | null = null;
 let dgSession: DeepgramLiveSession | null = null;
 let interactionMode = false;
-let llmCache: LlmConfig | null = null;
+let allLlmCache: LlmConfig[] | null = null;
 
 /** Hide overlay from screen capture / share (you still see it locally). Off if CONTENT_PROTECTION=false in .env */
 let captureShieldEnabled =
@@ -34,12 +36,52 @@ let captureShieldEnabled =
 /** Whole-window opacity (0.15–1). Separate from CSS; adjusted via Tools slider. */
 let overlayUserOpacity = 1;
 
+// ---------------------------------------------------------------------------
+// Answer cache — avoids re-calling the LLM for the same question within 5 min
+// ---------------------------------------------------------------------------
+type CacheEntry = { answer: CopilotAnswer; ts: number };
+const answerCache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+function answerCacheKey(input: GenerateInput): string {
+  const raw = `${input.mode}|${input.latestUtterance.trim().toLowerCase()}|${(input.manualContext ?? '').trim()}`;
+  let h = 5381;
+  for (let i = 0; i < raw.length; i++) {
+    h = (Math.imul(h, 31) + raw.charCodeAt(i)) | 0;
+  }
+  return String(h >>> 0);
+}
+
+function getCachedAnswer(input: GenerateInput): CopilotAnswer | null {
+  const key = answerCacheKey(input);
+  const entry = answerCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > CACHE_TTL_MS) {
+    answerCache.delete(key);
+    return null;
+  }
+  return entry.answer;
+}
+
+function setCachedAnswer(input: GenerateInput, answer: CopilotAnswer): void {
+  // Evict stale entries occasionally to avoid unbounded growth
+  if (answerCache.size > 200) {
+    const now = Date.now();
+    for (const [k, v] of answerCache) {
+      if (now - v.ts > CACHE_TTL_MS) answerCache.delete(k);
+    }
+  }
+  answerCache.set(answerCacheKey(input), { answer, ts: Date.now() });
+}
+
+// ---------------------------------------------------------------------------
+
 function clampOverlayOpacity(v: number): number {
   if (!Number.isFinite(v)) return 1;
   return Math.min(1, Math.max(0.15, v));
 }
 
-/** Match renderer `copilot.bg` — opaque ARGB so transparent windows don’t show the desktop through gaps. */
+/** Match renderer `copilot.bg` — opaque ARGB so transparent windows don't show the desktop through gaps. */
 const OVERLAY_SOLID_BG = '#FF0c0d10';
 const OVERLAY_CLEAR_BG = '#00000000';
 
@@ -91,9 +133,9 @@ function attachCaptureShieldHooks(win: BrowserWindow) {
   win.on('moved', reapply);
 }
 
-function getLlm(): LlmConfig {
-  if (!llmCache) llmCache = resolveLlmConfig();
-  return llmCache;
+function getAllLlm(): LlmConfig[] {
+  if (!allLlmCache) allLlmCache = resolveAllLlmConfigs();
+  return allLlmCache;
 }
 
 function applyClickThrough(clickThrough: boolean) {
@@ -108,6 +150,11 @@ function applyClickThrough(clickThrough: boolean) {
 function broadcastTranscript(ev: TranscriptEvent) {
   if (!overlay || overlay.isDestroyed()) return;
   overlay.webContents.send('copilot:transcript', ev);
+}
+
+function broadcastMode(mode: GenerateMode) {
+  if (!overlay || overlay.isDestroyed()) return;
+  overlay.webContents.send('copilot:mode', mode);
 }
 
 /**
@@ -228,6 +275,11 @@ function registerShortcuts() {
   tryReg('Alt+Shift+O', retoggle);
   tryReg('Alt+Shift+I', toggleInteraction);
 
+  // Mode shortcuts: Alt+1 = Full, Alt+2 = Hint, Alt+3 = Simpler
+  tryReg('Alt+1', () => broadcastMode('full'));
+  tryReg('Alt+2', () => broadcastMode('hint_only'));
+  tryReg('Alt+3', () => broadcastMode('explain_simpler'));
+
   app.on('will-quit', () => {
     globalShortcut.unregisterAll();
   });
@@ -300,6 +352,14 @@ function setupIpc() {
           },
           onClose: () => {
             dgSession = null;
+            if (overlay && !overlay.isDestroyed()) {
+              overlay.webContents.send('copilot:stt-closed');
+            }
+          },
+          onReconnecting: (attempt) => {
+            if (overlay && !overlay.isDestroyed()) {
+              overlay.webContents.send('copilot:stt-reconnecting', attempt);
+            }
           },
         },
         sampleRate,
@@ -322,8 +382,14 @@ function setupIpc() {
 
   ipcMain.handle('ai:generate', async (_e, input: GenerateInput) => {
     try {
-      const answer = await generateStructuredAnswer(getLlm(), input);
-      return { ok: true as const, answer };
+      // Return cached answer immediately if available
+      const cached = getCachedAnswer(input);
+      if (cached) {
+        return { ok: true as const, answer: cached, cached: true };
+      }
+      const answer = await generateStructuredAnswer(getAllLlm(), input);
+      setCachedAnswer(input, answer);
+      return { ok: true as const, answer, cached: false };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false as const, error: message };
@@ -334,7 +400,7 @@ function setupIpc() {
     'ai:chat',
     async (_e, payload: { messages: ChatTurn[] }) => {
       try {
-        const text = await runChatCompletion(getLlm(), payload.messages);
+        const text = await runChatCompletion(getAllLlm(), payload.messages);
         return { ok: true as const, text };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

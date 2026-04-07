@@ -7,6 +7,7 @@ type State = {
   capabilities: AppCapabilities;
   interactionMode: boolean;
   sttRunning: boolean;
+  sttReconnecting: boolean;
   liveLine: string;
   transcriptLog: string;
   manualNotes: string;
@@ -16,9 +17,11 @@ type State = {
   generating: boolean;
   error: string | null;
   lastGenerateKey: string;
+  lastTokensUsed: number | null;
   setCapabilities: (c: State['capabilities']) => void;
   setInteractionMode: (v: boolean) => void;
   setSttRunning: (v: boolean) => void;
+  setSttReconnecting: (v: boolean) => void;
   setLiveLine: (v: string) => void;
   appendFinalTranscript: (text: string) => void;
   setManualNotes: (v: string) => void;
@@ -27,6 +30,7 @@ type State = {
   setGenerating: (v: boolean) => void;
   setError: (e: string | null) => void;
   setLastGenerateKey: (k: string) => void;
+  setLastTokensUsed: (n: number | null) => void;
   rebuildSummary: () => void;
   /** Reset live STT text, transcript log, summary, manual notes, and structured answer */
   clearSession: () => void;
@@ -51,6 +55,7 @@ export const useCopilotStore = create<State>((set) => ({
   },
   interactionMode: false,
   sttRunning: false,
+  sttReconnecting: false,
   liveLine: '',
   transcriptLog: '',
   manualNotes: '',
@@ -60,9 +65,11 @@ export const useCopilotStore = create<State>((set) => ({
   generating: false,
   error: null,
   lastGenerateKey: '',
+  lastTokensUsed: null,
   setCapabilities: (capabilities) => set({ capabilities }),
   setInteractionMode: (interactionMode) => set({ interactionMode }),
   setSttRunning: (sttRunning) => set({ sttRunning }),
+  setSttReconnecting: (sttReconnecting) => set({ sttReconnecting }),
   setLiveLine: (liveLine) => set({ liveLine }),
   appendFinalTranscript: (text) =>
     set((s) => {
@@ -77,6 +84,7 @@ export const useCopilotStore = create<State>((set) => ({
   setGenerating: (generating) => set({ generating }),
   setError: (error) => set({ error }),
   setLastGenerateKey: (lastGenerateKey) => set({ lastGenerateKey }),
+  setLastTokensUsed: (lastTokensUsed) => set({ lastTokensUsed }),
   rebuildSummary: () =>
     set((s) => {
       const merged = `${s.transcriptLog}\n${s.manualNotes}`.trim();
@@ -96,5 +104,6 @@ export const useCopilotStore = create<State>((set) => ({
       lastGenerateKey: '',
       error: null,
       generating: false,
+      lastTokensUsed: null,
     }),
 }));

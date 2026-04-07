@@ -16,6 +16,10 @@ export type CopilotAnswer = {
   spaceComplexity?: string;
   edgeCases: string[];
   followUpHints: string[];
+  /** Total tokens consumed generating this answer (all steps combined). */
+  tokensUsed?: number;
+  /** Which AI provider produced this answer. */
+  providerUsed?: string;
 };
 
 export type GenerateMode = 'full' | 'hint_only' | 'explain_simpler';

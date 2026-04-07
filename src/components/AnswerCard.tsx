@@ -1,8 +1,13 @@
 import type { CopilotAnswer } from '../../shared/types';
 
-type Props = { answer: CopilotAnswer; solidChrome?: boolean };
+type Props = {
+  answer: CopilotAnswer;
+  solidChrome?: boolean;
+  /** Called when a follow-up hint is clicked — triggers a new generation for that hint. */
+  onFollowUpClick?: (hint: string) => void;
+};
 
-export function AnswerCard({ answer, solidChrome = false }: Props) {
+export function AnswerCard({ answer, solidChrome = false, onFollowUpClick }: Props) {
   return (
     <div className="space-y-5 text-base text-slate-200">
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-copilot-muted">
@@ -19,6 +24,16 @@ export function AnswerCard({ answer, solidChrome = false }: Props) {
         ) : null}
         {answer.spaceComplexity ? (
           <span>S {answer.spaceComplexity}</span>
+        ) : null}
+        {answer.providerUsed ? (
+          <span className="rounded-md bg-copilot-surface px-2 py-1 text-slate-500">
+            {answer.providerUsed}
+          </span>
+        ) : null}
+        {answer.tokensUsed ? (
+          <span className="rounded-md bg-copilot-surface px-2 py-1 tabular-nums text-slate-500">
+            {answer.tokensUsed.toLocaleString()} tok
+          </span>
         ) : null}
       </div>
       <section>
@@ -67,11 +82,33 @@ export function AnswerCard({ answer, solidChrome = false }: Props) {
         <section>
           <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-copilot-muted">
             Follow-ups
+            {onFollowUpClick ? (
+              <span className="ml-2 normal-case font-normal text-copilot-muted/60">
+                — click to drill in
+              </span>
+            ) : null}
           </h3>
-          <ul className="list-inside list-disc space-y-1 text-[15px] leading-relaxed text-slate-300">
-            {answer.followUpHints.map((e) => (
-              <li key={e}>{e}</li>
-            ))}
+          <ul className="space-y-1.5">
+            {answer.followUpHints.map((e) =>
+              onFollowUpClick ? (
+                <li key={e}>
+                  <button
+                    type="button"
+                    onClick={() => onFollowUpClick(e)}
+                    className="w-full rounded-lg border border-copilot-border/60 bg-copilot-surface/30 px-3 py-2 text-left text-[14px] leading-relaxed text-slate-300 hover:border-copilot-accent/40 hover:bg-copilot-surface/60 hover:text-slate-100 transition-colors"
+                  >
+                    {e}
+                  </button>
+                </li>
+              ) : (
+                <li
+                  key={e}
+                  className="list-inside list-disc text-[15px] leading-relaxed text-slate-300"
+                >
+                  {e}
+                </li>
+              ),
+            )}
           </ul>
         </section>
       ) : null}

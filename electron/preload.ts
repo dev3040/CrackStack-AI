@@ -4,6 +4,7 @@ import type {
   ChatTurn,
   CopilotAnswer,
   GenerateInput,
+  GenerateMode,
   TranscriptEvent,
 } from '../shared/types';
 
@@ -17,7 +18,8 @@ export type CopilotApi = {
   aiGenerate: (
     input: GenerateInput,
   ) => Promise<
-    { ok: true; answer: CopilotAnswer } | { ok: false; error: string }
+    | { ok: true; answer: CopilotAnswer; cached: boolean }
+    | { ok: false; error: string }
   >;
   aiChat: (
     payload: { messages: ChatTurn[] },
@@ -28,7 +30,11 @@ export type CopilotApi = {
   overlayGetOpacity: () => Promise<number>;
   onTranscript: (cb: (ev: TranscriptEvent) => void) => () => void;
   onSttError: (cb: (message: string) => void) => () => void;
+  onSttReconnecting: (cb: (attempt: number) => void) => () => void;
+  onSttClosed: (cb: () => void) => () => void;
   onInteraction: (cb: (enabled: boolean) => void) => () => void;
+  /** Fired when a global mode shortcut (Alt+1/2/3) is pressed. */
+  onMode: (cb: (mode: GenerateMode) => void) => () => void;
   windowHide: () => Promise<{ ok: true }>;
   shieldGet: () => Promise<boolean>;
   shieldSet: (enabled: boolean) => Promise<boolean>;
@@ -57,10 +63,25 @@ const api: CopilotApi = {
     ipcRenderer.on('copilot:stt-error', handler);
     return () => ipcRenderer.removeListener('copilot:stt-error', handler);
   },
+  onSttReconnecting: (cb) => {
+    const handler = (_: IpcRendererEvent, attempt: number) => cb(attempt);
+    ipcRenderer.on('copilot:stt-reconnecting', handler);
+    return () => ipcRenderer.removeListener('copilot:stt-reconnecting', handler);
+  },
+  onSttClosed: (cb) => {
+    const handler = (_: IpcRendererEvent) => cb();
+    ipcRenderer.on('copilot:stt-closed', handler);
+    return () => ipcRenderer.removeListener('copilot:stt-closed', handler);
+  },
   onInteraction: (cb) => {
     const handler = (_: IpcRendererEvent, enabled: boolean) => cb(enabled);
     ipcRenderer.on('copilot:interaction', handler);
     return () => ipcRenderer.removeListener('copilot:interaction', handler);
+  },
+  onMode: (cb) => {
+    const handler = (_: IpcRendererEvent, mode: GenerateMode) => cb(mode);
+    ipcRenderer.on('copilot:mode', handler);
+    return () => ipcRenderer.removeListener('copilot:mode', handler);
   },
   windowHide: () => ipcRenderer.invoke('window:hide'),
   shieldGet: () => ipcRenderer.invoke('shield:get'),

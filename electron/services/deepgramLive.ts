@@ -7,6 +7,8 @@ type Handlers = {
   onTranscript: (ev: TranscriptEvent) => void;
   onError: (err: Error) => void;
   onClose: () => void;
+  /** Called each time a reconnect attempt begins (attempt = 1-based count). */
+  onReconnecting?: (attempt: number) => void;
 };
 
 type Alt = { transcript?: string; confidence?: number };
@@ -18,7 +20,7 @@ function envTrim(key: string): string | undefined {
 
 /**
  * Defaults tuned for video calls (Meet, Zoom, etc.): Nova-3 accuracy, explicit English,
- * slightly longer endpointing so words aren’t cut on choppy VoIP.
+ * slightly longer endpointing so words aren't cut on choppy VoIP.
  */
 function buildListenQueryParams(sampleRate: number): URLSearchParams {
   const model = envTrim('DEEPGRAM_MODEL') ?? 'nova-3';
@@ -100,9 +102,13 @@ function pickBestTranscript(alternatives: Alt[] | undefined): string {
   return best.transcript?.trim() ?? '';
 }
 
+const MAX_RECONNECTS = 5;
+const RECONNECT_BASE_DELAY_MS = 1000;
+
 /**
  * Deepgram live streaming over WebSocket.
  * Sends linear16 mono PCM at sampleRate (browser AudioContext is often 48 kHz).
+ * Auto-reconnects on unexpected drops with exponential backoff (up to 5 attempts).
  * @see https://developers.deepgram.com/docs/getting-started-with-live-streaming-audio
  */
 export class DeepgramLiveSession {
@@ -110,6 +116,9 @@ export class DeepgramLiveSession {
   private readonly apiKey: string;
   private readonly handlers: Handlers;
   private readonly sampleRate: number;
+  private intentionallyClosed = false;
+  private reconnectCount = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(apiKey: string, handlers: Handlers, sampleRate = 16_000) {
     this.apiKey = apiKey;
@@ -155,7 +164,21 @@ export class DeepgramLiveSession {
 
     this.ws.on('close', () => {
       this.ws = null;
-      this.handlers.onClose();
+      if (!this.intentionallyClosed && this.reconnectCount < MAX_RECONNECTS) {
+        const delay = Math.min(
+          RECONNECT_BASE_DELAY_MS * Math.pow(2, this.reconnectCount),
+          30_000,
+        );
+        this.reconnectCount++;
+        this.handlers.onReconnecting?.(this.reconnectCount);
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
+          this.connect();
+        }, delay);
+      } else {
+        this.reconnectCount = 0;
+        this.handlers.onClose();
+      }
     });
   }
 
@@ -166,6 +189,11 @@ export class DeepgramLiveSession {
   }
 
   close(): void {
+    this.intentionallyClosed = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: 'CloseStream' }));
     }

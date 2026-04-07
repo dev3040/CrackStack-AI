@@ -141,6 +141,7 @@ export default function App() {
     capabilities,
     interactionMode,
     sttRunning,
+    sttReconnecting,
     liveLine,
     transcriptLog,
     manualNotes,
@@ -151,6 +152,7 @@ export default function App() {
     setCapabilities,
     setInteractionMode,
     setSttRunning,
+    setSttReconnecting,
     setLiveLine,
     appendFinalTranscript,
     setManualNotes,
@@ -160,6 +162,7 @@ export default function App() {
     setGenerating,
     setError,
     setLastGenerateKey,
+    setLastTokensUsed,
     clearSession,
   } = useCopilotStore();
 
@@ -185,8 +188,12 @@ export default function App() {
         mode,
       });
       setGenerating(false);
-      if (res.ok) setAnswer(res.answer);
-      else setError(res.error);
+      if (res.ok) {
+        setAnswer(res.answer);
+        setLastTokensUsed(res.answer.tokensUsed ?? null);
+      } else {
+        setError(res.error);
+      }
     },
     [
       capabilities.aiReady,
@@ -195,6 +202,7 @@ export default function App() {
       setError,
       setGenerating,
       setLastGenerateKey,
+      setLastTokensUsed,
       uiMode,
     ],
   );
@@ -288,8 +296,31 @@ export default function App() {
     return off;
   }, [setInteractionMode]);
 
+  // Global mode shortcuts (Alt+1/2/3) sent from main process
   useEffect(() => {
+    const off = api.onMode((mode) => {
+      setUiMode(mode);
+      const text =
+        useCopilotStore.getState().liveLine ||
+        useCopilotStore.getState().transcriptLog.slice(-500) ||
+        useCopilotStore.getState().manualNotes;
+      if (text.trim()) void runGenerate(text, mode);
+    });
+    return off;
+  }, [runGenerate, setUiMode]);
+
+  useEffect(() => {
+    const offReconnecting = api.onSttReconnecting((attempt) => {
+      setSttReconnecting(true);
+      setError(`STT disconnected — reconnecting (attempt ${attempt}/5)…`);
+    });
+    const offClosed = api.onSttClosed(() => {
+      setSttRunning(false);
+      setSttReconnecting(false);
+    });
     const offT = api.onTranscript((ev) => {
+      setSttReconnecting(false);
+      setError(null);
       if (!ev.isFinal && !ev.speechFinal) {
         setLiveLine(ev.text);
         return;
@@ -318,10 +349,15 @@ export default function App() {
         }, 750);
       }
     });
-    const offE = api.onSttError((msg) => setError(msg));
+    const offE = api.onSttError((msg) => {
+      setSttReconnecting(false);
+      setError(msg);
+    });
     return () => {
       offT();
       offE();
+      offReconnecting();
+      offClosed();
       if (finalFallbackTimerRef.current) {
         clearTimeout(finalFallbackTimerRef.current);
         finalFallbackTimerRef.current = null;
@@ -338,6 +374,7 @@ export default function App() {
     scheduleGenerateAfterSttSilence,
     setError,
     setLiveLine,
+    setSttReconnecting,
   ]);
 
   const stopSttInner = useCallback(async () => {
@@ -350,7 +387,8 @@ export default function App() {
     stopCaptureRef.current = null;
     await api.sttStop();
     setSttRunning(false);
-  }, [setSttRunning]);
+    setSttReconnecting(false);
+  }, [setSttRunning, setSttReconnecting]);
 
   const beginSttCapture = useCallback(
     async (opts: {
@@ -579,7 +617,7 @@ export default function App() {
               </span>
             </div>
             <p className="leading-relaxed text-copilot-muted">
-              Alt+Shift+O hide window · Alt+Shift+I interact / click-through
+              Alt+Shift+O hide · Alt+Shift+I interact · Alt+1/2/3 mode
             </p>
 
             <div className="rounded-lg border border-copilot-border/80 bg-copilot-surface/30 p-2.5">
@@ -1001,10 +1039,13 @@ export default function App() {
             <p className="min-w-0 flex-1 truncate text-sm text-cyan-100/95">
               {liveLine || 'Waiting for speech…'}
             </p>
-            {sttRunning ? (
-              <span
-                className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-red-500"
-              />
+            {sttRunning && !sttReconnecting ? (
+              <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-red-500" />
+            ) : null}
+            {sttReconnecting ? (
+              <span className="shrink-0 text-[10px] text-amber-400 animate-pulse">
+                reconnecting…
+              </span>
             ) : null}
             {generating ? (
               <span className="shrink-0 text-[10px] text-copilot-accent">
@@ -1028,7 +1069,11 @@ export default function App() {
             }`}
           >
             {answer ? (
-              <AnswerCard answer={answer} solidChrome={solidChrome} />
+              <AnswerCard
+                answer={answer}
+                solidChrome={solidChrome}
+                onFollowUpClick={(hint) => void runGenerate(hint)}
+              />
             ) : (
               <div className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-3 text-center">
                 <p className="max-w-md text-lg font-medium text-slate-400">

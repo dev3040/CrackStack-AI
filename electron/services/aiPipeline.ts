@@ -227,7 +227,7 @@ async function generateRawCodeOnly(
   llm: LlmConfig,
   input: GenerateInput,
   meta: CopilotAnswer,
-): Promise<string> {
+): Promise<{ code: string; tokens: number }> {
   const lang =
     meta.languageGuess?.trim() ||
     /javascript|js|typescript|ts|python|java|go|rust|c\+\+|csharp/i.exec(
@@ -260,7 +260,10 @@ Write the complete solution now.`;
   });
 
   const raw = completion.choices[0]?.message?.content;
-  return stripMarkdownFences(raw ?? '');
+  return {
+    code: stripMarkdownFences(raw ?? ''),
+    tokens: completion.usage?.total_tokens ?? 0,
+  };
 }
 
 function shouldUseTwoStepCoding(input: GenerateInput): boolean {
@@ -269,6 +272,29 @@ function shouldUseTwoStepCoding(input: GenerateInput): boolean {
     -4000,
   );
   return looksLikeCodeRequest(haystack);
+}
+
+/**
+ * Try the given async operation against each LlmConfig in order.
+ * Falls through to the next provider only on rate-limit (429) or unavailable (503) errors.
+ * Other errors (auth, bad request, parse) are thrown immediately.
+ */
+async function tryWithFallback<T>(
+  configs: LlmConfig[],
+  fn: (cfg: LlmConfig) => Promise<T>,
+): Promise<T> {
+  let lastErr: unknown = new Error('No AI providers configured');
+  for (const cfg of configs) {
+    try {
+      return await fn(cfg);
+    } catch (err) {
+      lastErr = err;
+      const status = (err as { status?: number }).status;
+      // Only fall through to next provider for transient/capacity errors
+      if (status !== 429 && status !== 503) throw err;
+    }
+  }
+  throw lastErr;
 }
 
 /**
@@ -291,22 +317,34 @@ export function getAiCapabilitiesFromEnv(): {
   return { aiReady: false, aiProvider: null };
 }
 
+/** Returns one LlmConfig for the first available provider (for display/status). */
 export function resolveLlmConfig(): LlmConfig {
+  const all = resolveAllLlmConfigs();
+  return all[0];
+}
+
+/**
+ * Returns all configured providers in priority order (Groq → OpenRouter → OpenAI).
+ * Used by the fallback chain so a rate-limited provider is skipped automatically.
+ */
+export function resolveAllLlmConfigs(): LlmConfig[] {
+  const configs: LlmConfig[] = [];
+
   const groq = process.env.GROQ_API_KEY?.trim();
   if (groq) {
-    return {
+    configs.push({
       client: new OpenAI({
         apiKey: groq,
         baseURL: 'https://api.groq.com/openai/v1',
       }),
       model: process.env.LLM_MODEL?.trim() || 'llama-3.1-8b-instant',
       provider: 'groq',
-    };
+    });
   }
 
   const openrouter = process.env.OPENROUTER_API_KEY?.trim();
   if (openrouter) {
-    return {
+    configs.push({
       client: new OpenAI({
         apiKey: openrouter,
         baseURL: 'https://openrouter.ai/api/v1',
@@ -320,21 +358,25 @@ export function resolveLlmConfig(): LlmConfig {
         process.env.LLM_MODEL?.trim() ||
         'meta-llama/llama-3.2-3b-instruct:free',
       provider: 'openrouter',
-    };
+    });
   }
 
   const openai = process.env.OPENAI_API_KEY?.trim();
   if (openai) {
-    return {
+    configs.push({
       client: new OpenAI({ apiKey: openai }),
       model: process.env.LLM_MODEL?.trim() || 'gpt-4o-mini',
       provider: 'openai',
-    };
+    });
   }
 
-  throw new Error(
-    'No AI API key. Add GROQ_API_KEY (free: https://console.groq.com), OPENROUTER_API_KEY, or OPENAI_API_KEY to .env',
-  );
+  if (configs.length === 0) {
+    throw new Error(
+      'No AI API key. Add GROQ_API_KEY (free: https://console.groq.com), OPENROUTER_API_KEY, or OPENAI_API_KEY to .env',
+    );
+  }
+
+  return configs;
 }
 
 const RETRY_USER = `Your previous answer was invalid or truncated.
@@ -346,6 +388,15 @@ Reply with ONE valid JSON object only:
 - kind must be CODING or DSA if this is a coding task.`;
 
 export async function generateStructuredAnswer(
+  configs: LlmConfig[],
+  input: GenerateInput,
+): Promise<CopilotAnswer> {
+  return tryWithFallback(configs, (llm) =>
+    generateStructuredAnswerWithLlm(llm, input),
+  );
+}
+
+async function generateStructuredAnswerWithLlm(
   llm: LlmConfig,
   input: GenerateInput,
 ): Promise<CopilotAnswer> {
@@ -355,42 +406,39 @@ export async function generateStructuredAnswer(
       { role: 'user' as const, content: userPayloadCodingMeta(input) },
     ];
     const metaMax = Math.min(maxTokensStructured(input), 3000);
-    let completion = await createCompletion(
-      llm,
-      metaMessages,
-      metaMax,
-      true,
-    );
+    let tokensUsed = 0;
+
+    let completion = await createCompletion(llm, metaMessages, metaMax, true);
+    tokensUsed += completion.usage?.total_tokens ?? 0;
+
     let answer: CopilotAnswer;
     try {
       answer = parseCopilotJson(completion.choices[0]?.message?.content);
     } catch {
       completion = await createCompletion(
         llm,
-        [
-          ...metaMessages,
-          { role: 'user' as const, content: RETRY_USER },
-        ],
+        [...metaMessages, { role: 'user' as const, content: RETRY_USER }],
         metaMax + 1024,
         true,
       );
+      tokensUsed += completion.usage?.total_tokens ?? 0;
       answer = parseCopilotJson(completion.choices[0]?.message?.content);
     }
 
     answer.codeSnippet = '';
-    let code = '';
     try {
-      code = await generateRawCodeOnly(llm, input, answer);
+      const { code, tokens } = await generateRawCodeOnly(llm, input, answer);
+      tokensUsed += tokens;
+      if (code.length >= 12) answer.codeSnippet = code;
     } catch {
-      code = '';
-    }
-    if (code.length >= 12) {
-      answer.codeSnippet = code;
+      /* code step failed — fall through to single-shot */
     }
 
     if (!answer.codeSnippet) {
       return generateStructuredAnswerSingleShot(llm, input);
     }
+    answer.tokensUsed = tokensUsed;
+    answer.providerUsed = llm.provider;
     return answer;
   }
 
@@ -407,17 +455,23 @@ async function generateStructuredAnswerSingleShot(
     { role: 'user' as const, content: userPayload(input) },
   ];
 
+  let tokensUsed = 0;
   let completion = await createCompletion(llm, baseMessages, max_tokens, true);
+  tokensUsed += completion.usage?.total_tokens ?? 0;
+
   let choice = completion.choices[0];
   let content = choice?.message?.content;
   const fr = choice?.finish_reason;
 
   try {
-    return parseCopilotJson(content);
+    const answer = parseCopilotJson(content);
+    answer.tokensUsed = tokensUsed;
+    answer.providerUsed = llm.provider;
+    return answer;
   } catch (firstErr) {
     const needsRetry =
       fr === 'length' ||
-      (firstErr instanceof SyntaxError) ||
+      firstErr instanceof SyntaxError ||
       (firstErr instanceof Error &&
         (firstErr.message.includes('JSON') ||
           firstErr.message.includes('Invalid answer')));
@@ -426,10 +480,7 @@ async function generateStructuredAnswerSingleShot(
 
     const retryMessages = [
       ...baseMessages,
-      {
-        role: 'user' as const,
-        content: RETRY_USER,
-      },
+      { role: 'user' as const, content: RETRY_USER },
     ];
 
     completion = await createCompletion(
@@ -438,9 +489,13 @@ async function generateStructuredAnswerSingleShot(
       Math.min(max_tokens + 2048, 16_384),
       true,
     );
+    tokensUsed += completion.usage?.total_tokens ?? 0;
     choice = completion.choices[0];
     content = choice?.message?.content;
-    return parseCopilotJson(content);
+    const answer = parseCopilotJson(content);
+    answer.tokensUsed = tokensUsed;
+    answer.providerUsed = llm.provider;
+    return answer;
   }
 }
 
@@ -451,6 +506,15 @@ const CHAT_SYSTEM = `You are CrackStack AI — a sharp, practical technical inte
 - Be concise but complete; avoid filler.`;
 
 export async function runChatCompletion(
+  configs: LlmConfig[],
+  messages: ChatTurn[],
+): Promise<string> {
+  return tryWithFallback(configs, (llm) =>
+    runChatCompletionWithLlm(llm, messages),
+  );
+}
+
+async function runChatCompletionWithLlm(
   llm: LlmConfig,
   messages: ChatTurn[],
 ): Promise<string> {
