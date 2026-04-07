@@ -4,6 +4,9 @@ import type {
   ChatTurn,
   CopilotAnswer,
   GenerateInput,
+  ResumeData,
+  ResumeQuestion,
+  ResumeInterviewAnswer,
 } from '../../shared/types';
 
 export type {
@@ -13,6 +16,12 @@ export type {
   GenerateInput,
   GenerateMode,
   QuestionKind,
+  ResumeData,
+  ResumeEducation,
+  ResumeExperience,
+  ResumeInterviewAnswer,
+  ResumeProject,
+  ResumeQuestion,
 } from '../../shared/types';
 
 export type LlmConfig = {
@@ -100,6 +109,10 @@ CODE TASK: Put the **entire** working solution in codeSnippet only (never in sho
 `
     : '';
 
+  const resumeSection = input.resumeContext
+    ? `\nCandidate resume context (tailor your answer to their background):\n"""\n${input.resumeContext}\n"""\n`
+    : '';
+
   return `${modeHint}
 ${codeUrgency}
 Latest utterance (candidate or interviewer):
@@ -117,6 +130,7 @@ Optional manual notes from candidate:
 """
 ${input.manualContext ?? ''}
 """
+${resumeSection}
 
 JSON shape (all string values must be valid JSON-escaped):
 {
@@ -138,6 +152,10 @@ function userPayloadCodingMeta(input: GenerateInput): string {
       ? 'MODE: explain_simpler — use simple words in shortAnswer and detailedExplanation.'
       : 'MODE: full — thorough verbal explanation; still no code in this JSON.';
 
+  const resumeSection = input.resumeContext
+    ? `\nCandidate resume context:\n"""\n${input.resumeContext}\n"""\n`
+    : '';
+
   return `${modeHint}
 
 Latest utterance:
@@ -155,7 +173,7 @@ Manual notes:
 """
 ${input.manualContext ?? ''}
 """
-
+${resumeSection}
 Return JSON with keys: kind, languageGuess (if known), shortAnswer, detailedExplanation, codeSnippet (must be ""), timeComplexity, spaceComplexity, edgeCases, followUpHints.`;
 }
 
@@ -497,6 +515,314 @@ async function generateStructuredAnswerSingleShot(
     answer.providerUsed = llm.provider;
     return answer;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Resume: parse + generate interview questions + generate interview answers
+// ---------------------------------------------------------------------------
+
+const RESUME_PARSE_SYSTEM = `You are a resume parser. Extract structured info from the provided resume text and return ONLY a valid JSON object.`;
+
+const RESUME_QUESTIONS_SYSTEM = `You are an expert technical interviewer. Based on the provided resume data, generate likely interview questions. Return ONLY a valid JSON object.`;
+
+const INTERVIEW_ANSWER_SYSTEM = `You are speaking AS the job candidate in a live interview. Generate natural, first-person interview answers strictly based on the candidate's resume.
+
+Rules:
+- Speak in first person: "I worked on...", "In my role at...", "One project I built..."
+- Reference SPECIFIC details from the resume: company names, project names, technologies, achievements, durations
+- Sound natural and conversational — like a real, well-prepared candidate answering
+- Keep answers focused: 2–4 short paragraphs at most
+- If the question isn't directly covered, reason from related skills/experience in the resume
+- Maintain professional interview tone — confident but not arrogant
+- NEVER invent details not present in the resume
+- Return ONLY a valid JSON object`;
+
+export async function parseResume(
+  configs: LlmConfig[],
+  resumeText: string,
+): Promise<ResumeData> {
+  return tryWithFallback(configs, async (llm) => {
+    const user = `Parse this resume and return a JSON object with these exact keys:
+- name: candidate's full name (string or null)
+- skills: flat array of all technical skills and technologies (string[])
+- experience: concise summary of overall work experience (1–3 sentences, string)
+- projects: array of project name strings (string[])
+- summary: 2–3 sentence professional summary suitable as AI answer context (string)
+- detailedExperience: array of objects, each with: company (string), role (string), duration (string), highlights (string[] — up to 4 key bullet points per role)
+- detailedProjects: array of objects, each with: name (string), description (string — 1–2 sentences), tech (string[] — technologies used)
+- education: array of objects, each with: institution (string), degree (string), year (string optional)
+
+Resume:
+"""
+${resumeText.slice(0, 10000)}
+"""
+
+Return ONLY the JSON object, no markdown, no extra text.`;
+
+    const completion = await llm.client.chat.completions.create({
+      model: llm.model,
+      temperature: 0.1,
+      max_tokens: 2000,
+      messages: [
+        { role: 'system', content: RESUME_PARSE_SYSTEM },
+        { role: 'user', content: user },
+      ],
+    });
+
+    const raw = completion.choices[0]?.message?.content?.trim() ?? '';
+    let text = raw;
+    const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fence) text = fence[1].trim();
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start === -1 || end === -1) throw new Error('Resume parse: no JSON returned');
+    const parsed = JSON.parse(text.slice(start, end + 1)) as ResumeData;
+    if (!Array.isArray(parsed.skills)) parsed.skills = [];
+    if (!Array.isArray(parsed.projects)) parsed.projects = [];
+    if (!Array.isArray(parsed.detailedExperience)) parsed.detailedExperience = [];
+    if (!Array.isArray(parsed.detailedProjects)) parsed.detailedProjects = [];
+    if (!Array.isArray(parsed.education)) parsed.education = [];
+    if (!parsed.experience) parsed.experience = '';
+    if (!parsed.summary) parsed.summary = '';
+    return parsed;
+  });
+}
+
+export async function generateInterviewAnswer(
+  configs: LlmConfig[],
+  question: string,
+  resumeData: ResumeData,
+): Promise<ResumeInterviewAnswer> {
+  return tryWithFallback(configs, async (llm) => {
+    const expSection = resumeData.detailedExperience?.length
+      ? resumeData.detailedExperience
+          .map(
+            (e) =>
+              `${e.role} at ${e.company} (${e.duration}):\n${e.highlights.map((h) => `  • ${h}`).join('\n')}`,
+          )
+          .join('\n\n')
+      : resumeData.experience;
+
+    const projSection = resumeData.detailedProjects?.length
+      ? resumeData.detailedProjects
+          .map(
+            (p) =>
+              `${p.name}: ${p.description} [Tech: ${p.tech.join(', ')}]`,
+          )
+          .join('\n')
+      : resumeData.projects.join(', ');
+
+    const eduSection = resumeData.education?.length
+      ? resumeData.education
+          .map((e) => `${e.degree} — ${e.institution}${e.year ? ` (${e.year})` : ''}`)
+          .join('\n')
+      : '';
+
+    const context = `Candidate: ${resumeData.name ?? 'the candidate'}
+Skills: ${resumeData.skills.join(', ')}
+
+Experience:
+${expSection}
+
+Projects:
+${projSection}
+${eduSection ? `\nEducation:\n${eduSection}` : ''}
+
+Professional Summary: ${resumeData.summary}`;
+
+    const user = `Interview question: "${question}"
+
+Candidate's resume context:
+"""
+${context}
+"""
+
+Generate a natural first-person interview answer as this specific candidate. Return a JSON object with:
+- answer: the full conversational answer (string) — speak as the candidate, reference their actual projects/companies/skills
+- keyPoints: array of 2–4 short strings highlighting the specific resume elements referenced in the answer
+
+Return ONLY the JSON object.`;
+
+    const completion = await llm.client.chat.completions.create({
+      model: llm.model,
+      temperature: 0.3,
+      max_tokens: 1200,
+      messages: [
+        { role: 'system', content: INTERVIEW_ANSWER_SYSTEM },
+        { role: 'user', content: user },
+      ],
+    });
+
+    const raw = completion.choices[0]?.message?.content?.trim() ?? '';
+    let text = raw;
+    const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fence) text = fence[1].trim();
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start === -1 || end === -1) throw new Error('Interview answer: no JSON returned');
+    const parsed = JSON.parse(text.slice(start, end + 1)) as ResumeInterviewAnswer;
+    if (typeof parsed.answer !== 'string' || !parsed.answer.trim()) {
+      throw new Error('Interview answer: empty answer returned');
+    }
+    if (!Array.isArray(parsed.keyPoints)) parsed.keyPoints = [];
+    return parsed;
+  });
+}
+
+export async function generateResumeQuestions(
+  configs: LlmConfig[],
+  resumeData: ResumeData,
+): Promise<ResumeQuestion[]> {
+  return tryWithFallback(configs, async (llm) => {
+    const context = `Name: ${resumeData.name ?? 'Candidate'}
+Skills: ${resumeData.skills.join(', ')}
+Experience: ${resumeData.experience}
+Projects: ${resumeData.projects.join(', ')}
+Summary: ${resumeData.summary}`;
+
+    const user = `Based on this candidate's resume, generate 8–10 likely interview questions that an interviewer would ask. Mix technical, behavioral, HR, and project-based questions relevant to their background.
+
+Resume summary:
+"""
+${context}
+"""
+
+Return ONLY a JSON object with key "questions" which is an array of objects, each with:
+- question: string
+- category: "HR" | "TECHNICAL" | "PROJECT" | "BEHAVIORAL"
+
+No markdown, no extra text.`;
+
+    const completion = await llm.client.chat.completions.create({
+      model: llm.model,
+      temperature: 0.4,
+      max_tokens: 1200,
+      messages: [
+        { role: 'system', content: RESUME_QUESTIONS_SYSTEM },
+        { role: 'user', content: user },
+      ],
+    });
+
+    const raw = completion.choices[0]?.message?.content?.trim() ?? '';
+    let text = raw;
+    const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fence) text = fence[1].trim();
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start === -1 || end === -1) throw new Error('Resume questions: no JSON returned');
+    const parsed = JSON.parse(text.slice(start, end + 1)) as { questions: ResumeQuestion[] };
+    if (!Array.isArray(parsed.questions)) return [];
+    return parsed.questions;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Screen analysis — vision-capable providers only (not Groq)
+// ---------------------------------------------------------------------------
+
+const SCREEN_ANALYZE_SYSTEM = `You are CrackStack AI analyzing a screenshot from a technical interview or coding session.
+
+Instructions:
+1. Read ALL visible text — chat messages, code editors, documents, problem statements, online judge pages
+2. Identify the main question or coding task the interviewer / platform is presenting
+3. Produce a complete, interview-ready answer exactly as you would from a spoken question
+4. For coding problems put the full working solution in codeSnippet
+5. For conceptual / system-design questions give a thorough structured explanation
+6. If multiple questions appear, address all of them
+7. shortAnswer must be plain English — no code, no curly braces
+
+Return ONLY valid JSON matching the schema shown in the user message.`;
+
+/** Vision-capable configs: OpenRouter + OpenAI (Groq has no vision support). */
+export function resolveVisionConfigs(): LlmConfig[] {
+  const configs: LlmConfig[] = [];
+
+  const openrouter = process.env.OPENROUTER_API_KEY?.trim();
+  if (openrouter) {
+    configs.push({
+      client: new OpenAI({
+        apiKey: openrouter,
+        baseURL: 'https://openrouter.ai/api/v1',
+        defaultHeaders: {
+          'HTTP-Referer':
+            process.env.OPENROUTER_HTTP_REFERER?.trim() || 'http://localhost',
+          'X-Title': 'CrackStack AI',
+        },
+      }),
+      model: process.env.VISION_MODEL?.trim() || 'google/gemini-flash-1.5-8b',
+      provider: 'openrouter',
+    });
+  }
+
+  const openai = process.env.OPENAI_API_KEY?.trim();
+  if (openai) {
+    configs.push({
+      client: new OpenAI({ apiKey: openai }),
+      model: process.env.VISION_MODEL?.trim() || 'gpt-4o-mini',
+      provider: 'openai',
+    });
+  }
+
+  return configs;
+}
+
+export async function analyzeScreenshot(
+  visionConfigs: LlmConfig[],
+  screenshotDataUrl: string,
+  conversationContext?: string,
+): Promise<CopilotAnswer> {
+  if (visionConfigs.length === 0) {
+    throw new Error(
+      'No vision-capable provider configured. Add OPENAI_API_KEY or OPENROUTER_API_KEY to .env',
+    );
+  }
+
+  return tryWithFallback(visionConfigs, async (llm) => {
+    const contextSection = conversationContext?.trim()
+      ? `\nRecent conversation context:\n"""\n${conversationContext.slice(-2000)}\n"""\n`
+      : '';
+
+    const completion = await llm.client.chat.completions.create({
+      model: llm.model,
+      temperature: 0.2,
+      max_tokens: 4096,
+      messages: [
+        { role: 'system', content: SCREEN_ANALYZE_SYSTEM },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'image_url',
+              image_url: { url: screenshotDataUrl, detail: 'high' },
+            },
+            {
+              type: 'text',
+              text: `${contextSection}
+Analyze this screenshot and answer the question(s) visible on screen.
+
+JSON shape (all string values must be valid JSON-escaped):
+{
+  "kind": "DSA" | "SYSTEM_DESIGN" | "HR" | "CODING" | "DEBUGGING" | "UNKNOWN",
+  "languageGuess": string optional,
+  "shortAnswer": string,
+  "detailedExplanation": string,
+  "codeSnippet": string optional,
+  "timeComplexity": string optional,
+  "spaceComplexity": string optional,
+  "edgeCases": string[],
+  "followUpHints": string[]
+}`,
+            },
+          ],
+        },
+      ],
+    });
+
+    const answer = parseCopilotJson(completion.choices[0]?.message?.content);
+    answer.tokensUsed = completion.usage?.total_tokens ?? 0;
+    answer.providerUsed = llm.provider;
+    return answer;
+  });
 }
 
 const CHAT_SYSTEM = `You are CrackStack AI — a sharp, practical technical interview coach.

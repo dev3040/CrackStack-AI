@@ -6,6 +6,9 @@ import type {
   CopilotAnswer,
   GenerateInput,
   GenerateMode,
+  ResumeData,
+  ResumeInterviewAnswer,
+  ResumeQuestion,
   TranscriptEvent,
 } from '../shared/types';
 
@@ -41,6 +44,31 @@ declare global {
       windowHide: () => Promise<{ ok: true }>;
       shieldGet: () => Promise<boolean>;
       shieldSet: (enabled: boolean) => Promise<boolean>;
+      resumeParse: (
+        text: string,
+      ) => Promise<{ ok: true; data: ResumeData } | { ok: false; error: string }>;
+      resumeQuestions: (
+        data: ResumeData,
+      ) => Promise<
+        { ok: true; questions: ResumeQuestion[] } | { ok: false; error: string }
+      >;
+      resumeInterviewAnswer: (payload: {
+        question: string;
+        resumeData: ResumeData;
+      }) => Promise<
+        { ok: true; result: ResumeInterviewAnswer } | { ok: false; error: string }
+      >;
+      resumeUploadFile: (payload: {
+        base64: string;
+        mimeType: string;
+        fileName: string;
+      }) => Promise<{ ok: true; text: string } | { ok: false; error: string }>;
+      analyzeScreen: (
+        context?: string,
+      ) => Promise<
+        | { ok: true; answer: CopilotAnswer }
+        | { ok: false; error: string }
+      >;
     };
   }
 }

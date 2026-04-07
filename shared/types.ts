@@ -29,6 +29,47 @@ export type GenerateInput = {
   conversationSummary: string;
   manualContext?: string;
   mode: GenerateMode;
+  resumeContext?: string;
+};
+
+export type ResumeProject = {
+  name: string;
+  description: string;
+  tech: string[];
+};
+
+export type ResumeExperience = {
+  company: string;
+  role: string;
+  duration: string;
+  highlights: string[];
+};
+
+export type ResumeEducation = {
+  institution: string;
+  degree: string;
+  year?: string;
+};
+
+export type ResumeData = {
+  name?: string;
+  skills: string[];
+  experience: string;
+  projects: string[];
+  summary: string;
+  detailedExperience?: ResumeExperience[];
+  detailedProjects?: ResumeProject[];
+  education?: ResumeEducation[];
+};
+
+export type ResumeQuestion = {
+  question: string;
+  category: 'HR' | 'TECHNICAL' | 'PROJECT' | 'BEHAVIORAL';
+};
+
+export type ResumeInterviewAnswer = {
+  answer: string;
+  keyPoints: string[];
 };
 
 /** Deepgram (or other STT) live partial/final payloads */

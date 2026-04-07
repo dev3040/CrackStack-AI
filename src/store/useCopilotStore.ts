@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { AppCapabilities, CopilotAnswer } from '../../shared/types';
+import type { AppCapabilities, CopilotAnswer, ResumeData, ResumeQuestion } from '../../shared/types';
 
 export type UiMode = 'full' | 'hint_only' | 'explain_simpler';
 
@@ -18,6 +18,10 @@ type State = {
   error: string | null;
   lastGenerateKey: string;
   lastTokensUsed: number | null;
+  resumeText: string;
+  resumeData: ResumeData | null;
+  resumeQuestions: ResumeQuestion[];
+  resumeParsing: boolean;
   setCapabilities: (c: State['capabilities']) => void;
   setInteractionMode: (v: boolean) => void;
   setSttRunning: (v: boolean) => void;
@@ -32,6 +36,11 @@ type State = {
   setLastGenerateKey: (k: string) => void;
   setLastTokensUsed: (n: number | null) => void;
   rebuildSummary: () => void;
+  setResumeText: (v: string) => void;
+  setResumeData: (d: ResumeData | null) => void;
+  setResumeQuestions: (q: ResumeQuestion[]) => void;
+  setResumeParsing: (v: boolean) => void;
+  clearResume: () => void;
   /** Reset live STT text, transcript log, summary, manual notes, and structured answer */
   clearSession: () => void;
 };
@@ -66,6 +75,10 @@ export const useCopilotStore = create<State>((set) => ({
   error: null,
   lastGenerateKey: '',
   lastTokensUsed: null,
+  resumeText: '',
+  resumeData: null,
+  resumeQuestions: [],
+  resumeParsing: false,
   setCapabilities: (capabilities) => set({ capabilities }),
   setInteractionMode: (interactionMode) => set({ interactionMode }),
   setSttRunning: (sttRunning) => set({ sttRunning }),
@@ -94,6 +107,12 @@ export const useCopilotStore = create<State>((set) => ({
           : merged;
       return { conversationSummary: tail };
     }),
+  setResumeText: (resumeText) => set({ resumeText }),
+  setResumeData: (resumeData) => set({ resumeData }),
+  setResumeQuestions: (resumeQuestions) => set({ resumeQuestions }),
+  setResumeParsing: (resumeParsing) => set({ resumeParsing }),
+  clearResume: () =>
+    set({ resumeText: '', resumeData: null, resumeQuestions: [], resumeParsing: false }),
   clearSession: () =>
     set({
       liveLine: '',

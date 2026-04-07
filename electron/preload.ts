@@ -5,6 +5,9 @@ import type {
   CopilotAnswer,
   GenerateInput,
   GenerateMode,
+  ResumeData,
+  ResumeInterviewAnswer,
+  ResumeQuestion,
   TranscriptEvent,
 } from '../shared/types';
 
@@ -38,6 +41,29 @@ export type CopilotApi = {
   windowHide: () => Promise<{ ok: true }>;
   shieldGet: () => Promise<boolean>;
   shieldSet: (enabled: boolean) => Promise<boolean>;
+  resumeParse: (
+    text: string,
+  ) => Promise<{ ok: true; data: ResumeData } | { ok: false; error: string }>;
+  resumeQuestions: (
+    data: ResumeData,
+  ) => Promise<{ ok: true; questions: ResumeQuestion[] } | { ok: false; error: string }>;
+  resumeInterviewAnswer: (payload: {
+    question: string;
+    resumeData: ResumeData;
+  }) => Promise<
+    { ok: true; result: ResumeInterviewAnswer } | { ok: false; error: string }
+  >;
+  resumeUploadFile: (payload: {
+    base64: string;
+    mimeType: string;
+    fileName: string;
+  }) => Promise<{ ok: true; text: string } | { ok: false; error: string }>;
+  analyzeScreen: (
+    context?: string,
+  ) => Promise<
+    | { ok: true; answer: CopilotAnswer }
+    | { ok: false; error: string }
+  >;
 };
 
 const api: CopilotApi = {
@@ -86,6 +112,12 @@ const api: CopilotApi = {
   windowHide: () => ipcRenderer.invoke('window:hide'),
   shieldGet: () => ipcRenderer.invoke('shield:get'),
   shieldSet: (enabled) => ipcRenderer.invoke('shield:set', enabled),
+  resumeParse: (text) => ipcRenderer.invoke('resume:parse', text),
+  resumeQuestions: (data) => ipcRenderer.invoke('resume:questions', data),
+  resumeInterviewAnswer: (payload) =>
+    ipcRenderer.invoke('resume:interview-answer', payload),
+  resumeUploadFile: (payload) => ipcRenderer.invoke('resume:upload-file', payload),
+  analyzeScreen: (context) => ipcRenderer.invoke('ai:analyze-screen', context),
 };
 
 contextBridge.exposeInMainWorld('copilotApi', api);

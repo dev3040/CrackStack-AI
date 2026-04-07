@@ -5,6 +5,7 @@ import {
 } from './audio/capture';
 import { AnswerCard } from './components/AnswerCard';
 import { ChatDock } from './components/ChatDock';
+import { ResumePanel } from './components/ResumePanel';
 import { TitleBar } from './components/TitleBar';
 import { ToolsDrawer } from './components/ToolsDrawer';
 import { useCopilotStore } from './store/useCopilotStore';
@@ -129,6 +130,8 @@ export default function App() {
   const [chatInput, setChatInput] = useState('');
   const [chatBusy, setChatBusy] = useState(false);
   const [overlayOpacity, setOverlayOpacity] = useState(() => readStoredOpacity());
+  const [activeTab, setActiveTab] = useState<'copilot' | 'resume'>('copilot');
+  const [screenAnalyzing, setScreenAnalyzing] = useState(false);
 
   const applyOverlayOpacity = (raw: number) => {
     const v = clampUiOpacity(raw);
@@ -149,6 +152,10 @@ export default function App() {
     uiMode,
     generating,
     error,
+    resumeData,
+    resumeText,
+    resumeQuestions,
+    resumeParsing,
     setCapabilities,
     setInteractionMode,
     setSttRunning,
@@ -163,6 +170,11 @@ export default function App() {
     setError,
     setLastGenerateKey,
     setLastTokensUsed,
+    setResumeText,
+    setResumeData,
+    setResumeQuestions,
+    setResumeParsing,
+    clearResume,
     clearSession,
   } = useCopilotStore();
 
@@ -175,6 +187,10 @@ export default function App() {
       rebuildSummary();
       const summary = useCopilotStore.getState().conversationSummary;
       const manual = useCopilotStore.getState().manualNotes;
+      const rd = useCopilotStore.getState().resumeData;
+      const resumeContext = rd
+        ? `Skills: ${rd.skills.join(', ')}. ${rd.experience}${rd.projects.length ? ` Projects: ${rd.projects.join(', ')}.` : ''}`
+        : undefined;
       const key = `${trimmed}|${mode}|${summary.slice(-200)}`;
       if (useCopilotStore.getState().lastGenerateKey === key) return;
       setLastGenerateKey(key);
@@ -186,6 +202,7 @@ export default function App() {
         conversationSummary: summary,
         manualContext: manual || undefined,
         mode,
+        resumeContext,
       });
       setGenerating(false);
       if (res.ok) {
@@ -235,6 +252,21 @@ export default function App() {
     setChatBusy(false);
     if (res.ok) {
       setChatMessages([...next, { role: 'assistant', content: res.text }]);
+    } else {
+      setError(res.error);
+    }
+  };
+
+  const handleAnalyzeScreen = async () => {
+    if (screenAnalyzing || !capabilities.aiReady) return;
+    setScreenAnalyzing(true);
+    setError(null);
+    const context = useCopilotStore.getState().conversationSummary;
+    const res = await api.analyzeScreen(context || undefined);
+    setScreenAnalyzing(false);
+    if (res.ok) {
+      setAnswer(res.answer);
+      setLastTokensUsed(res.answer.tokensUsed ?? null);
     } else {
       setError(res.error);
     }
@@ -595,6 +627,41 @@ export default function App() {
         <span className="w-9 shrink-0 text-right text-[10px] tabular-nums text-slate-300">
           {Math.round(overlayOpacity * 100)}%
         </span>
+      </div>
+
+      {/* Tab bar */}
+      <div
+        className={`no-drag flex shrink-0 items-center gap-0.5 border-b border-copilot-border/60 px-3 py-1.5 ${
+          solidChrome ? 'bg-copilot-surface' : 'bg-copilot-surface/30'
+        }`}
+      >
+        <button
+          type="button"
+          onClick={() => setActiveTab('copilot')}
+          className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
+            activeTab === 'copilot'
+              ? 'bg-copilot-accent/20 text-copilot-accent'
+              : 'text-copilot-muted hover:text-slate-200'
+          }`}
+        >
+          AI Copilot
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('resume')}
+          className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
+            activeTab === 'resume'
+              ? 'bg-copilot-accent/20 text-copilot-accent'
+              : 'text-copilot-muted hover:text-slate-200'
+          }`}
+        >
+          Resume Q&amp;A
+          {resumeData && (
+            <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-emerald-600/70 text-[9px] text-white">
+              ✓
+            </span>
+          )}
+        </button>
       </div>
 
       <div className="relative flex min-h-0 flex-1 flex-col">
@@ -966,6 +1033,108 @@ export default function App() {
               </div>
             ) : null}
 
+            {/* ── Resume ── */}
+            <div className="rounded-lg border border-copilot-border/80 bg-copilot-surface/30 p-2.5">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-copilot-muted">
+                  Resume context
+                </span>
+                {resumeData ? (
+                  <button
+                    type="button"
+                    onClick={clearResume}
+                    className="text-[10px] text-rose-300/70 hover:text-rose-200"
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+
+              {!resumeData ? (
+                <>
+                  <textarea
+                    value={resumeText}
+                    onChange={(e) => setResumeText(e.target.value)}
+                    rows={5}
+                    className="w-full resize-none rounded-lg border border-copilot-border bg-copilot-surface/90 p-2 font-mono text-xs text-slate-100"
+                    placeholder="Paste your resume text here…"
+                  />
+                  <button
+                    type="button"
+                    disabled={resumeParsing || !resumeText.trim() || !capabilities.aiReady}
+                    onClick={async () => {
+                      setResumeParsing(true);
+                      const res = await api.resumeParse(resumeText);
+                      setResumeParsing(false);
+                      if (res.ok) {
+                        setResumeData(res.data);
+                        const qRes = await api.resumeQuestions(res.data);
+                        if (qRes.ok) setResumeQuestions(qRes.questions);
+                      } else {
+                        setError(res.error);
+                      }
+                    }}
+                    className="mt-2 w-full rounded-lg bg-copilot-accent/20 py-1.5 text-[11px] font-semibold text-copilot-accent disabled:opacity-40"
+                  >
+                    {resumeParsing ? 'Parsing…' : 'Parse resume & generate questions'}
+                  </button>
+                </>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  <div className="rounded-md border border-copilot-border/60 bg-black/20 p-2 text-[10px] text-slate-300">
+                    <div className="mb-1 font-semibold text-slate-100">
+                      {resumeData.name ?? 'Resume loaded'}
+                    </div>
+                    {resumeData.skills.length > 0 && (
+                      <div className="mb-1">
+                        <span className="text-copilot-muted">Skills: </span>
+                        {resumeData.skills.slice(0, 8).join(', ')}
+                        {resumeData.skills.length > 8 ? ` +${resumeData.skills.length - 8}` : ''}
+                      </div>
+                    )}
+                    <div className="text-copilot-muted leading-snug">{resumeData.summary}</div>
+                  </div>
+
+                  {resumeQuestions.length > 0 && (
+                    <div>
+                      <div className="mb-1.5 text-[10px] font-semibold text-copilot-muted">
+                        Likely questions — click to pre-load answer
+                      </div>
+                      <div className="flex max-h-52 flex-col gap-1 overflow-y-auto">
+                        {resumeQuestions.map((rq, i) => (
+                          <button
+                            key={i}
+                            type="button"
+                            disabled={generating || !capabilities.aiReady}
+                            onClick={() => {
+                              setToolsOpen(false);
+                              void runGenerate(rq.question);
+                            }}
+                            className="rounded-md border border-copilot-border/60 bg-copilot-bg/60 px-2 py-1.5 text-left text-[10px] leading-snug text-slate-200 hover:bg-copilot-surface/70 disabled:opacity-40"
+                          >
+                            <span
+                              className={`mr-1.5 rounded px-1 py-0.5 text-[9px] font-semibold uppercase ${
+                                rq.category === 'TECHNICAL'
+                                  ? 'bg-sky-900/50 text-sky-200'
+                                  : rq.category === 'PROJECT'
+                                    ? 'bg-violet-900/50 text-violet-200'
+                                    : rq.category === 'BEHAVIORAL'
+                                      ? 'bg-amber-900/50 text-amber-200'
+                                      : 'bg-slate-700/60 text-slate-300'
+                              }`}
+                            >
+                              {rq.category}
+                            </span>
+                            {rq.question}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div className="flex flex-col gap-2">
               <button
                 type="button"
@@ -985,7 +1154,26 @@ export default function App() {
           </div>
         </ToolsDrawer>
 
-        <div className="no-drag flex min-h-0 flex-1 flex-col">
+        {activeTab === 'resume' ? (
+          <ResumePanel
+            solidChrome={solidChrome}
+            aiReady={capabilities.aiReady}
+            resumeData={resumeData}
+            resumeText={resumeText}
+            resumeQuestions={resumeQuestions}
+            resumeParsing={resumeParsing}
+            onResumeText={setResumeText}
+            onResumeParsed={(data, questions) => {
+              setResumeData(data);
+              setResumeQuestions(questions);
+            }}
+            onSetResumeParsing={setResumeParsing}
+            onClearResume={clearResume}
+            onError={(msg) => setError(msg)}
+          />
+        ) : null}
+
+        <div className={`no-drag flex min-h-0 flex-1 flex-col ${activeTab !== 'copilot' ? 'hidden' : ''}`}>
           <div
             className={`flex shrink-0 flex-wrap items-center gap-2 border-b border-copilot-border/70 px-4 py-2 ${
               solidChrome ? 'bg-copilot-surface/90' : 'bg-copilot-surface/25'
@@ -1019,12 +1207,25 @@ export default function App() {
               >
                 Speak
               </button>
+              <button
+                type="button"
+                disabled={screenAnalyzing || !capabilities.aiReady}
+                onClick={() => void handleAnalyzeScreen()}
+                title="Capture the screen and answer any question visible (coding problem, chat, doc)"
+                className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                  screenAnalyzing
+                    ? 'bg-violet-700 text-white animate-pulse'
+                    : 'border border-copilot-border bg-copilot-bg/80 text-slate-200 hover:bg-copilot-surface'
+                }`}
+              >
+                {screenAnalyzing ? 'Analyzing…' : 'Analyze Screen'}
+              </button>
             </div>
             <p className="min-w-0 flex-1 text-[10px] leading-snug text-copilot-muted">
               <span className="text-slate-500">Listen</span> — system / meeting
               audio.{' '}
-              <span className="text-slate-500">Speak</span> — your mic only.
-              Only one runs at a time.
+              <span className="text-slate-500">Speak</span> — your mic only.{' '}
+              <span className="text-slate-500">Analyze Screen</span> — reads visible question.
             </p>
           </div>
 

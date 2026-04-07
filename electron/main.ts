@@ -11,15 +11,21 @@ import path from 'node:path';
 import dotenv from 'dotenv';
 import { DeepgramLiveSession, type TranscriptEvent } from './services/deepgramLive';
 import {
+  analyzeScreenshot,
+  generateInterviewAnswer,
   generateStructuredAnswer,
+  generateResumeQuestions,
   getAiCapabilitiesFromEnv,
+  parseResume,
   resolveAllLlmConfigs,
+  resolveVisionConfigs,
   runChatCompletion,
   type ChatTurn,
   type CopilotAnswer,
   type GenerateInput,
   type GenerateMode,
   type LlmConfig,
+  type ResumeData,
 } from './services/aiPipeline';
 
 dotenv.config({ path: path.join(__dirname, '../../.env') });
@@ -28,6 +34,7 @@ let overlay: BrowserWindow | null = null;
 let dgSession: DeepgramLiveSession | null = null;
 let interactionMode = false;
 let allLlmCache: LlmConfig[] | null = null;
+let visionLlmCache: LlmConfig[] | null = null;
 
 /** Hide overlay from screen capture / share (you still see it locally). Off if CONTENT_PROTECTION=false in .env */
 let captureShieldEnabled =
@@ -136,6 +143,11 @@ function attachCaptureShieldHooks(win: BrowserWindow) {
 function getAllLlm(): LlmConfig[] {
   if (!allLlmCache) allLlmCache = resolveAllLlmConfigs();
   return allLlmCache;
+}
+
+function getVisionLlm(): LlmConfig[] {
+  if (!visionLlmCache) visionLlmCache = resolveVisionConfigs();
+  return visionLlmCache;
 }
 
 function applyClickThrough(clickThrough: boolean) {
@@ -405,6 +417,138 @@ function setupIpc() {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { ok: false as const, error: message };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'ai:analyze-screen',
+    async (_e, context?: string) => {
+      try {
+        const visionCfgs = getVisionLlm();
+        if (visionCfgs.length === 0) {
+          return {
+            ok: false as const,
+            error:
+              'Screen analysis needs a vision-capable provider. Add OPENAI_API_KEY or OPENROUTER_API_KEY to .env',
+          };
+        }
+
+        // Hide overlay so it doesn't obscure the content we're analyzing
+        const wasVisible = overlay ? !overlay.isDestroyed() && overlay.isVisible() : false;
+        if (wasVisible) overlay?.hide();
+
+        // Give the OS time to redraw before capturing
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
+
+        const sources = await desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: { width: 1920, height: 1080 },
+          fetchWindowIcons: false,
+        });
+
+        // Restore overlay immediately after capture
+        if (wasVisible) overlay?.show();
+
+        const primary = screen.getPrimaryDisplay();
+        const source =
+          sources.find(
+            (s) =>
+              s.display_id !== '' && s.display_id === String(primary.id),
+          ) ??
+          sources[0];
+
+        if (!source) {
+          return { ok: false as const, error: 'Could not capture the screen' };
+        }
+
+        const dataUrl = source.thumbnail.toDataURL();
+        const answer = await analyzeScreenshot(visionCfgs, dataUrl, context);
+        return { ok: true as const, answer };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false as const, error: message };
+      }
+    },
+  );
+
+  ipcMain.handle('resume:parse', async (_e, resumeText: string) => {
+    try {
+      const data = await parseResume(getAllLlm(), resumeText);
+      return { ok: true as const, data };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false as const, error: message };
+    }
+  });
+
+  ipcMain.handle('resume:questions', async (_e, resumeData: unknown) => {
+    try {
+      const questions = await generateResumeQuestions(getAllLlm(), resumeData as ResumeData);
+      return { ok: true as const, questions };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false as const, error: message };
+    }
+  });
+
+  ipcMain.handle(
+    'resume:interview-answer',
+    async (_e, payload: { question: string; resumeData: ResumeData }) => {
+      try {
+        const result = await generateInterviewAnswer(
+          getAllLlm(),
+          payload.question,
+          payload.resumeData,
+        );
+        return { ok: true as const, result };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false as const, error: message };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'resume:upload-file',
+    async (_e, payload: { base64: string; mimeType: string; fileName: string }) => {
+      try {
+        const buffer = Buffer.from(payload.base64, 'base64');
+        let text = '';
+
+        if (
+          payload.mimeType === 'application/pdf' ||
+          payload.fileName.toLowerCase().endsWith('.pdf')
+        ) {
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const pdfParse = require('pdf-parse') as (
+            buf: Buffer,
+          ) => Promise<{ text: string }>;
+          const data = await pdfParse(buffer);
+          text = data.text;
+        } else if (
+          payload.mimeType ===
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+          payload.fileName.toLowerCase().endsWith('.docx')
+        ) {
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const mammoth = require('mammoth') as {
+            extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }>;
+          };
+          const result = await mammoth.extractRawText({ buffer });
+          text = result.value;
+        } else {
+          // Plain text / .txt
+          text = buffer.toString('utf-8');
+        }
+
+        if (!text.trim()) {
+          return { ok: false as const, error: 'Could not extract text from file. Try a different format.' };
+        }
+        return { ok: true as const, text: text.trim() };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false as const, error: `File parse error: ${message}` };
       }
     },
   );
