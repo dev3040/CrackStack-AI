@@ -132,6 +132,7 @@ export default function App() {
   const [overlayOpacity, setOverlayOpacity] = useState(() => readStoredOpacity());
   const [activeTab, setActiveTab] = useState<'copilot' | 'resume'>('copilot');
   const [screenAnalyzing, setScreenAnalyzing] = useState(false);
+  const [pushToTalkMode, setPushToTalkMode] = useState(false);
 
   const applyOverlayOpacity = (raw: number) => {
     const v = clampUiOpacity(raw);
@@ -526,6 +527,7 @@ export default function App() {
       setError('Add DEEPGRAM_API_KEY to .env for live STT.');
       return;
     }
+    setPushToTalkMode(false);
     if (listenSttActive) {
       await stopSttInner();
       return;
@@ -542,6 +544,7 @@ export default function App() {
       setError('Add DEEPGRAM_API_KEY to .env for live STT.');
       return;
     }
+    setPushToTalkMode(false);
     if (speakSttActive) {
       await stopSttInner();
       return;
@@ -551,6 +554,27 @@ export default function App() {
       includeMeetTabAudio: false,
       systemAudioOnly: false,
     });
+  };
+
+  const pushToTalkActive = pushToTalkMode && sttRunning;
+
+  const onPushToListenClick = async () => {
+    if (!capabilities.hasDeepgram) {
+      setError('Add DEEPGRAM_API_KEY to .env for live STT.');
+      return;
+    }
+    if (pushToTalkActive) {
+      // Stop and immediately generate answer from whatever was captured
+      const text = (questionBurstRef.current.trim() || liveLine.trim() || transcriptLog.slice(-500)).trim();
+      await stopSttInner();
+      setPushToTalkMode(false);
+      if (text) void runGenerate(text);
+      return;
+    }
+    // Stop any existing STT before starting push-to-talk
+    if (sttRunning) await stopSttInner();
+    setPushToTalkMode(true);
+    await beginSttCapture({ includeMeetTabAudio: true, systemAudioOnly: true });
   };
 
   const toggleInteraction = async () => {
@@ -1183,6 +1207,25 @@ export default function App() {
               STT
             </span>
             <div className="flex shrink-0 items-center gap-1.5">
+              {/* Push to Listen button */}
+              <button
+                type="button"
+                disabled={!capabilities.hasDeepgram}
+                onClick={() => void onPushToListenClick()}
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
+                  pushToTalkActive
+                    ? 'bg-rose-600 text-white ring-2 ring-rose-400/60 shadow-lg shadow-rose-900/40 scale-[1.04]'
+                    : 'border border-copilot-border bg-copilot-bg/80 text-slate-200 hover:bg-copilot-surface hover:border-rose-700/50'
+                }`}
+              >
+                <span className="relative flex h-2 w-2 shrink-0">
+                  {pushToTalkActive && (
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-300 opacity-75" />
+                  )}
+                  <span className={`relative inline-flex h-2 w-2 rounded-full ${pushToTalkActive ? 'bg-rose-200' : 'bg-slate-500'}`} />
+                </span>
+                {pushToTalkActive ? 'Listening… Stop' : 'Push to Listen'}
+              </button>
               <button
                 type="button"
                 disabled={!capabilities.hasDeepgram}
@@ -1211,7 +1254,6 @@ export default function App() {
                 type="button"
                 disabled={screenAnalyzing || !capabilities.aiReady}
                 onClick={() => void handleAnalyzeScreen()}
-                title="Capture the screen and answer any question visible (coding problem, chat, doc)"
                 className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                   screenAnalyzing
                     ? 'bg-violet-700 text-white animate-pulse'
@@ -1222,10 +1264,9 @@ export default function App() {
               </button>
             </div>
             <p className="min-w-0 flex-1 text-[10px] leading-snug text-copilot-muted">
-              <span className="text-slate-500">Listen</span> — system / meeting
-              audio.{' '}
-              <span className="text-slate-500">Speak</span> — your mic only.{' '}
-              <span className="text-slate-500">Analyze Screen</span> — reads visible question.
+              <span className="text-slate-500">Push to Listen</span> — click to listen, click again to get answer.{' '}
+              <span className="text-slate-500">Listen</span> — system audio.{' '}
+              <span className="text-slate-500">Speak</span> — mic only.
             </p>
           </div>
 
@@ -1282,11 +1323,12 @@ export default function App() {
                   explanations.
                 </p>
                 <p className="max-w-sm text-sm text-copilot-muted">
-                  Use <strong className="text-slate-500">Listen</strong> or{' '}
-                  <strong className="text-slate-500">Speak</strong> above for
-                  live STT, or paste a question in Tools.{' '}
-                  <strong className="text-slate-500">Chat</strong> below is for
-                  freeform Q&amp;A.
+                  Use <strong className="text-slate-500">Push to Listen</strong>{' '}
+                  to speak then get an instant answer, or{' '}
+                  <strong className="text-slate-500">Listen</strong> /{' '}
+                  <strong className="text-slate-500">Speak</strong> for
+                  continuous STT. <strong className="text-slate-500">Chat</strong>{' '}
+                  below is for freeform Q&amp;A.
                 </p>
               </div>
             )}
