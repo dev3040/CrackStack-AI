@@ -138,15 +138,27 @@ export async function startMeetMixedPcmCapture(
   let hadMeetTabAudio = false;
 
   if (options.includeMeetTabAudio) {
-    const picked = await navigator.mediaDevices.getDisplayMedia({
-      video: true,
-      audio: true,
-    });
-    hadMeetTabAudio = picked.getAudioTracks().length > 0;
-    if (!hadMeetTabAudio) {
-      picked.getTracks().forEach((t) => t.stop());
-    } else {
-      tabStream = picked;
+    try {
+      const picked = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: true,
+      });
+      hadMeetTabAudio = picked.getAudioTracks().length > 0;
+      if (!hadMeetTabAudio) {
+        picked.getTracks().forEach((t) => t.stop());
+      } else {
+        tabStream = picked;
+      }
+    } catch (e) {
+      if (
+        e instanceof DOMException &&
+        (e.name === 'NotSupportedError' || e.name === 'NotFoundError')
+      ) {
+        // Audio capture via getDisplayMedia not supported on this platform/config.
+        // Fall through — mic-only capture continues below.
+      } else {
+        throw e;
+      }
     }
   }
 

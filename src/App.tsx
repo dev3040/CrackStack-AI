@@ -401,7 +401,9 @@ export default function App() {
           setAudioHint(
             capabilities.platform === 'win32'
               ? 'Mic only: system audio was not attached. Allow the capture prompt, check Windows Privacy → Microphone, and ensure sound plays on your default output device.'
-              : 'Mic only: tab audio was not shared. When prompted, select the Meet tab and turn ON “Share tab audio”.',
+              : capabilities.platform === 'linux'
+                ? 'Mic only: tab audio capture is not supported on this Linux setup. To capture meeting audio with headphones, share the browser tab and enable “Share tab audio” — or set up a PulseAudio/PipeWire loopback.'
+                : 'Mic only: tab audio was not shared. When prompted, select the Meet tab and turn ON “Share tab audio”.',
           );
         }
 
@@ -418,14 +420,6 @@ export default function App() {
         if (name === 'NotAllowedError' || name === 'AbortError') {
           setError(
             'Tab/window capture was cancelled or blocked. Allow screen capture for this app, or turn off “Capture Meet tab audio”.',
-          );
-          return;
-        }
-        if (name === 'NotSupportedError') {
-          setError(
-            capabilities.platform === 'linux'
-              ? 'System audio capture is not supported on Linux. Use the Speak button and share your browser tab with “Share tab audio” enabled to capture meeting audio.'
-              : 'Audio capture is not supported on this platform.',
           );
           return;
         }
@@ -477,16 +471,13 @@ export default function App() {
     }
     if (sttRunning) await stopSttInner();
     listenModeRef.current = true;
-    if (capabilities.platform !== 'win32') {
-      // getDisplayMedia audio (WASAPI loopback) is Windows-only.
-      // On Linux/macOS fall back to mic capture and surface a hint.
-      setAudioHint(
-        'System audio loopback is only available on Windows. Capturing microphone instead.',
-      );
-      await beginSttCapture({ includeMeetTabAudio: false, systemAudioOnly: false });
-      return;
-    }
-    await beginSttCapture({ includeMeetTabAudio: true, systemAudioOnly: true });
+    // On non-Windows: attempt tab audio (captures before the output device, so
+    // works with headphones). systemAudioOnly=false keeps mic as fallback if
+    // getDisplayMedia has no audio tracks. WASAPI loopback is Windows-only.
+    await beginSttCapture({
+      includeMeetTabAudio: true,
+      systemAudioOnly: capabilities.platform === 'win32',
+    });
   };
 
   const onSpeakClick = async () => {
