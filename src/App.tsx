@@ -419,6 +419,14 @@ export default function App() {
           );
           return;
         }
+        if (name === 'NotSupportedError') {
+          setError(
+            capabilities.platform === 'linux'
+              ? 'System audio capture is not supported on Linux. Use the Speak button and share your browser tab with “Share tab audio” enabled to capture meeting audio.'
+              : 'Audio capture is not supported on this platform.',
+          );
+          return;
+        }
         setError(e instanceof Error ? e.message : String(e));
       }
     },
@@ -461,9 +469,10 @@ export default function App() {
       return;
     }
     if (sttRunning) await stopSttInner();
+    // System audio loopback (WASAPI) is Windows-only; on other platforms fall back to tab audio.
     await beginSttCapture({
       includeMeetTabAudio: true,
-      systemAudioOnly: true,
+      systemAudioOnly: capabilities.platform === 'win32',
     });
   };
 
