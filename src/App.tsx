@@ -83,6 +83,7 @@ function formatAnswerForClipboard(a: {
 
 export default function App() {
   const stopCaptureRef = useRef<(() => Promise<void>) | null>(null);
+  const listenModeRef = useRef(false);
   const silenceGenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const questionBurstRef = useRef<string>('');
   const finalFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -348,6 +349,7 @@ export default function App() {
     questionBurstRef.current = '';
     await stopCaptureRef.current?.();
     stopCaptureRef.current = null;
+    listenModeRef.current = false;
     await api.sttStop();
     setSttRunning(false);
   }, [setSttRunning]);
@@ -456,8 +458,13 @@ export default function App() {
   };
 
   const listenSttActive =
-    sttRunning && includeMeetTabAudio && sttSystemAudioOnly;
-  const speakSttActive = sttRunning && !includeMeetTabAudio;
+    capabilities.platform === 'win32'
+      ? sttRunning && includeMeetTabAudio && sttSystemAudioOnly
+      : sttRunning && listenModeRef.current;
+  const speakSttActive =
+    capabilities.platform === 'win32'
+      ? sttRunning && !includeMeetTabAudio
+      : sttRunning && !listenModeRef.current;
 
   const onListenClick = async () => {
     if (!capabilities.hasDeepgram) {
@@ -469,11 +476,17 @@ export default function App() {
       return;
     }
     if (sttRunning) await stopSttInner();
-    // System audio loopback (WASAPI) is Windows-only; on other platforms fall back to tab audio.
-    await beginSttCapture({
-      includeMeetTabAudio: true,
-      systemAudioOnly: capabilities.platform === 'win32',
-    });
+    listenModeRef.current = true;
+    if (capabilities.platform !== 'win32') {
+      // getDisplayMedia audio (WASAPI loopback) is Windows-only.
+      // On Linux/macOS fall back to mic capture and surface a hint.
+      setAudioHint(
+        'System audio loopback is only available on Windows. Capturing microphone instead.',
+      );
+      await beginSttCapture({ includeMeetTabAudio: false, systemAudioOnly: false });
+      return;
+    }
+    await beginSttCapture({ includeMeetTabAudio: true, systemAudioOnly: true });
   };
 
   const onSpeakClick = async () => {
@@ -486,6 +499,7 @@ export default function App() {
       return;
     }
     if (sttRunning) await stopSttInner();
+    listenModeRef.current = false;
     await beginSttCapture({
       includeMeetTabAudio: false,
       systemAudioOnly: false,
