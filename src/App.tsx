@@ -146,6 +146,8 @@ export default function App() {
     transcriptLog,
     manualNotes,
     answer,
+    answerHistory,
+    historyIndex,
     uiMode,
     generating,
     error,
@@ -157,6 +159,8 @@ export default function App() {
     setManualNotes,
     rebuildSummary,
     setAnswer,
+    appendToThread,
+    stepHistory,
     setUiMode,
     setGenerating,
     setError,
@@ -173,6 +177,7 @@ export default function App() {
       rebuildSummary();
       const summary = useCopilotStore.getState().conversationSummary;
       const manual = useCopilotStore.getState().manualNotes;
+      const thread = useCopilotStore.getState().conversationThread;
       const key = `${trimmed}|${mode}|${summary.slice(-200)}`;
       if (useCopilotStore.getState().lastGenerateKey === key) return;
       setLastGenerateKey(key);
@@ -182,12 +187,17 @@ export default function App() {
       const res = await api.aiGenerate({
         latestUtterance: trimmed,
         conversationSummary: summary,
+        conversationThread: thread.length ? thread : undefined,
         manualContext: manual || undefined,
         mode,
       });
       setGenerating(false);
-      if (res.ok) setAnswer(res.answer);
-      else setError(res.error);
+      if (res.ok) {
+        setAnswer(res.answer);
+        appendToThread(trimmed, res.answer);
+      } else {
+        setError(res.error);
+      }
     },
     [
       capabilities.aiReady,
@@ -1042,7 +1052,49 @@ export default function App() {
             }`}
           >
             {answer ? (
-              <AnswerCard answer={answer} solidChrome={solidChrome} />
+              <>
+                {/* History navigation — only shown when there are multiple answers */}
+                {answerHistory.length > 1 ? (() => {
+                  const effectiveIndex = historyIndex < 0 ? answerHistory.length - 1 : historyIndex;
+                  const canBack = effectiveIndex > 0;
+                  const canForward = effectiveIndex < answerHistory.length - 1;
+                  return (
+                    <div className="mb-3 flex items-center gap-2 text-[11px] text-copilot-muted">
+                      <button
+                        type="button"
+                        onClick={() => stepHistory(-1)}
+                        disabled={!canBack}
+                        className="rounded-md border border-copilot-border px-2 py-1 text-slate-300 hover:bg-copilot-surface disabled:opacity-30"
+                      >
+                        ← Prev
+                      </button>
+                      <span className="tabular-nums">
+                        {effectiveIndex + 1} / {answerHistory.length}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => stepHistory(1)}
+                        disabled={!canForward}
+                        className="rounded-md border border-copilot-border px-2 py-1 text-slate-300 hover:bg-copilot-surface disabled:opacity-30"
+                      >
+                        Next →
+                      </button>
+                      {historyIndex >= 0 ? (
+                        <span className="ml-1 rounded-md bg-copilot-surface px-2 py-0.5 text-[10px] text-copilot-accent">
+                          viewing history
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })() : null}
+                {/* key changes on every answer switch → triggers CSS fade-in */}
+                <div
+                  key={`${historyIndex}-${answerHistory.length}`}
+                  className="answer-fade-in"
+                >
+                  <AnswerCard answer={answer} solidChrome={solidChrome} />
+                </div>
+              </>
             ) : (
               <div className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-3 text-center">
                 <p className="max-w-md text-lg font-medium text-slate-400">

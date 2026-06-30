@@ -82,6 +82,15 @@ function maxTokensCodeOnly(): number {
   return 8192;
 }
 
+function buildThreadSection(input: GenerateInput): string {
+  if (!input.conversationThread?.length) return '';
+  const lines = input.conversationThread
+    .slice(-5)
+    .map((t, i) => `Q${i + 1}: "${t.utterance}"\nA${i + 1}: "${t.shortAnswer}"`)
+    .join('\n\n');
+  return `\nPrevious Q&A in this session (build on these for follow-up questions — do not repeat what was already covered unless asked):\n${lines}\n`;
+}
+
 function userPayload(input: GenerateInput): string {
   const modeHint =
     input.mode === 'hint_only'
@@ -102,6 +111,7 @@ CODE TASK: Put the **entire** working solution in codeSnippet only (never in sho
 
   return `${modeHint}
 ${codeUrgency}
+${buildThreadSection(input)}
 Latest utterance (candidate or interviewer):
 """
 ${input.latestUtterance}
@@ -139,7 +149,7 @@ function userPayloadCodingMeta(input: GenerateInput): string {
       : 'MODE: full — thorough verbal explanation; still no code in this JSON.';
 
   return `${modeHint}
-
+${buildThreadSection(input)}
 Latest utterance:
 """
 ${input.latestUtterance}

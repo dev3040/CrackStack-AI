@@ -20,9 +20,17 @@ export type CopilotAnswer = {
 
 export type GenerateMode = 'full' | 'hint_only' | 'explain_simpler';
 
+/** One resolved Q&A exchange — fed back as context for follow-up questions. */
+export type QATurn = {
+  utterance: string;
+  shortAnswer: string;
+};
+
 export type GenerateInput = {
   latestUtterance: string;
   conversationSummary: string;
+  /** Previous Q&A pairs so the model can build on its own prior answers. */
+  conversationThread?: QATurn[];
   manualContext?: string;
   mode: GenerateMode;
 };
