@@ -27,11 +27,13 @@ https://github.com/user-attachments/assets/d21f0978-bd9f-4726-816c-761ee3d54b6e
 | **Stealth** | Click-through by default (`Interact` / **Alt+Shift+I** to click); optional **hide from screen capture**; **hidden from Windows taskbar** by default |
 | **STT** | Microphone → **Deepgram** live streaming (optional `DEEPGRAM_API_KEY`) |
 | **Meet / tab audio** | Optional: share the **Chrome tab** with Meet and enable **Share tab audio** so remote voices are captured while using headphones |
+| **Interviewer isolation** | When mic + tab audio are both on, they stream to Deepgram as **two separate channels** (no more summing/clipping them together) — transcripts are tagged **"You"** vs **"Interviewer"**, and only the interviewer's channel auto-triggers an AI answer, so your own voice never gets mistaken for the question |
+| **Resume / JD personalization** | Paste your resume and the target job description in Tools — behavioral answers use your real background, technical depth is calibrated to the role, and names/tech terms from both are auto-boosted for speech recognition |
 | **Session AI** | Classifies question type (DSA, system design, coding, etc.) and returns JSON → **Code** (full solutions via a two-step pipeline when needed), **Short**, **Detail**, edge cases, follow-ups |
 | **Modes** | Full answer, Hint only, Explain simpler |
 | **Chat** | Bottom **Chat with AI** for freeform Q&A (separate from session transcript) |
-| **Tools drawer** | Slide-out panel: STT, modes, manual paste, transcript, screen-share shield, Meet tab option, clear session / clear chat |
-| **Clear** | **Clear conversation** (session transcript + answer + manual notes) and **Clear chat** |
+| **Tools drawer** | Slide-out panel: resume/JD profile, STT, modes, manual paste, transcript, screen-share shield, Meet tab option, clear session / clear chat |
+| **Clear** | **Clear conversation** (session transcript + answer + manual notes) and **Clear chat** — resume/JD profile persists across sessions |
 
 ---
 
@@ -96,7 +98,7 @@ Copy `.env.example` → `.env`. Common options:
 | `DEEPGRAM_MODEL` | No | Default `nova-3` (accuracy). For classic multi-speaker calls try `nova-2-meeting` |
 | `DEEPGRAM_LANGUAGE` | No | Default `en`; use `multi` only with a multilingual model (see Deepgram docs) |
 | `DEEPGRAM_ENDPOINTING` | No | Ms silence before phrase end (default `550`; raise if words get cut off) |
-| `DEEPGRAM_KEYTERMS` | No | Comma-separated jargon / names — boosts recognition (Nova-3: keyterms; Nova-2: keywords) |
+| `DEEPGRAM_KEYTERMS` | No | Comma-separated jargon / names — boosts recognition (Nova-3: keyterms; Nova-2: keywords). Merged at runtime with terms auto-extracted from your resume/JD in Tools |
 | `DEEPGRAM_SMART_FORMAT` | No | Set `false` if formatted numbers/dates look wrong in transcripts |
 | `CONTENT_PROTECTION` | No | `false` disables “hide from screen capture” (debug) |
 | `SHOW_IN_TASKBAR` | No | `true` shows the app on the **Windows taskbar** (default: hidden) |
@@ -176,10 +178,11 @@ Entry point for Electron: `package.json` → `"main": "dist-electron/electron/ma
 
 High level:
 
-1. **Renderer** captures audio (mic ± tab), sends PCM to **main** via IPC.  
-2. **Main** streams PCM to **Deepgram**, pushes transcripts to the renderer.  
-3. On phrase end, renderer triggers **structured generation** (`ai:generate`) in main — Groq/OpenRouter/OpenAI with JSON (and a dedicated **code-only** completion when a coding task is detected).  
-4. **Chat** uses `ai:chat` with conversation history (last ~28 turns).
+1. **Renderer** captures audio (mic ± tab). When both are active it interleaves them as **2 PCM channels** instead of mixing them into one (channel 0 = mic, channel 1 = tab), and sends that to **main** via IPC.
+2. **Main** streams PCM to **Deepgram** with `multichannel=true` when 2 channels are sent, so each channel is transcribed independently; transcripts come back tagged by channel and are pushed to the renderer, which labels them **"You"** vs **"Interviewer"**.
+3. On phrase end **on the interviewer's channel**, renderer triggers **structured generation** (`ai:generate`) in main — Groq/OpenRouter/OpenAI with JSON (and a dedicated **code-only** completion when a coding task is detected). Your own channel is logged for context but does not auto-trigger an answer.
+4. `ai:generate` and `ai:chat` both receive the optional **resume / job description** pasted in Tools, used to personalize behavioral answers and calibrate technical depth.
+5. **Chat** uses `ai:chat` with conversation history (last ~28 turns).
 
 More detail: **[ARCHITECTURE.md](./ARCHITECTURE.md)** (Electron vs Tauri, data flow, optimizations, limitations).
 

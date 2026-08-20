@@ -15,6 +15,7 @@ import {
   getAiCapabilitiesFromEnv,
   resolveLlmConfig,
   runChatCompletion,
+  type CandidateContext,
   type ChatTurn,
   type GenerateInput,
   type LlmConfig,
@@ -282,13 +283,20 @@ function setupIpc() {
 
   ipcMain.handle(
     'stt:start',
-    (_e, opts: { sampleRate: number } | undefined) => {
+    (
+      _e,
+      opts:
+        | { sampleRate: number; channels?: 1 | 2; keyterms?: string[] }
+        | undefined,
+    ) => {
       const key = process.env.DEEPGRAM_API_KEY;
       if (!key) {
         return { ok: false as const, error: 'DEEPGRAM_API_KEY missing in .env' };
       }
       dgSession?.close();
       const sampleRate = opts?.sampleRate ?? 16_000;
+      const channels = opts?.channels === 2 ? 2 : 1;
+      const keyterms = Array.isArray(opts?.keyterms) ? opts.keyterms : [];
       dgSession = new DeepgramLiveSession(
         key,
         {
@@ -303,6 +311,8 @@ function setupIpc() {
           },
         },
         sampleRate,
+        channels,
+        keyterms,
       );
       dgSession.connect();
       return { ok: true as const };
@@ -332,9 +342,16 @@ function setupIpc() {
 
   ipcMain.handle(
     'ai:chat',
-    async (_e, payload: { messages: ChatTurn[] }) => {
+    async (
+      _e,
+      payload: { messages: ChatTurn[]; candidateContext?: CandidateContext },
+    ) => {
       try {
-        const text = await runChatCompletion(getLlm(), payload.messages);
+        const text = await runChatCompletion(
+          getLlm(),
+          payload.messages,
+          payload.candidateContext,
+        );
         return { ok: true as const, text };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

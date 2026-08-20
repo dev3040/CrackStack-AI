@@ -26,6 +26,12 @@ export type QATurn = {
   shortAnswer: string;
 };
 
+/** Candidate's resume + target job description — used to personalize answers (Parakeet-style). */
+export type CandidateContext = {
+  resume?: string;
+  jobDescription?: string;
+};
+
 export type GenerateInput = {
   latestUtterance: string;
   conversationSummary: string;
@@ -33,13 +39,19 @@ export type GenerateInput = {
   conversationThread?: QATurn[];
   manualContext?: string;
   mode: GenerateMode;
+  candidateContext?: CandidateContext;
 };
+
+/** Which physical source produced a transcript when the session streams separate channels. */
+export type TranscriptSource = 'mic' | 'tab';
 
 /** Deepgram (or other STT) live partial/final payloads */
 export type TranscriptEvent = {
   text: string;
   isFinal: boolean;
   speechFinal: boolean;
+  /** Only set for multichannel sessions: 'mic' = your voice, 'tab' = interviewer / remote audio. */
+  source?: TranscriptSource;
 };
 
 export type AiProvider = 'groq' | 'openrouter' | 'openai' | null;

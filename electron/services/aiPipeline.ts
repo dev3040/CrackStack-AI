@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import type {
   AiProvider,
+  CandidateContext,
   ChatTurn,
   CopilotAnswer,
   GenerateInput,
@@ -8,6 +9,7 @@ import type {
 
 export type {
   AiProvider,
+  CandidateContext,
   ChatTurn,
   CopilotAnswer,
   GenerateInput,
@@ -23,6 +25,8 @@ export type LlmConfig = {
 
 const MULTI_QUESTION_HINT = `If the latest utterance contains several distinct questions in one turn, answer all of them: one shortAnswer line that covers each briefly, then detailedExplanation addressing each in order (optional light Q1/Q2 labels). If they are unrelated coding tasks, prioritize the main one in codeSnippet and mention the other in text.`;
 
+const CANDIDATE_CONTEXT_HINT = `If a candidate resume and/or target job description are provided below, use them to personalize HR/behavioral answers in first person with that real background (STAR-style stories drawn from the resume, not invented experience), and use the job description to calibrate technical depth, seniority, and terminology. If neither is provided, answer generically.`;
+
 const SYSTEM_PROMPT = `You are CrackStack AI. Given interview dialogue, produce interview-ready help.
 
 Rules:
@@ -31,6 +35,7 @@ Rules:
 - Put ALL source code exclusively in codeSnippet (complete solution when code is required).
 - If the utterance is not a technical question, set kind to HR or UNKNOWN and answer briefly.
 - ${MULTI_QUESTION_HINT}
+- ${CANDIDATE_CONTEXT_HINT}
 - Escape newlines inside JSON strings as \\n.`;
 
 /** Phase 1 (coding): JSON without code body — code comes from a second request. */
@@ -91,6 +96,26 @@ function buildThreadSection(input: GenerateInput): string {
   return `\nPrevious Q&A in this session (build on these for follow-up questions — do not repeat what was already covered unless asked):\n${lines}\n`;
 }
 
+/** Trims resume/JD to a sane prompt budget; both are optional. */
+function buildCandidateContextSection(ctx: CandidateContext | undefined): string {
+  const resume = ctx?.resume?.trim();
+  const jd = ctx?.jobDescription?.trim();
+  if (!resume && !jd) return '';
+
+  const parts: string[] = [];
+  if (resume) {
+    parts.push(
+      `Candidate resume:\n"""\n${resume.slice(0, 4000)}\n"""`,
+    );
+  }
+  if (jd) {
+    parts.push(
+      `Target job description:\n"""\n${jd.slice(0, 4000)}\n"""`,
+    );
+  }
+  return `\n${parts.join('\n\n')}\n`;
+}
+
 function userPayload(input: GenerateInput): string {
   const modeHint =
     input.mode === 'hint_only'
@@ -112,6 +137,7 @@ CODE TASK: Put the **entire** working solution in codeSnippet only (never in sho
   return `${modeHint}
 ${codeUrgency}
 ${buildThreadSection(input)}
+${buildCandidateContextSection(input.candidateContext)}
 Latest utterance (candidate or interviewer):
 """
 ${input.latestUtterance}
@@ -150,6 +176,7 @@ function userPayloadCodingMeta(input: GenerateInput): string {
 
   return `${modeHint}
 ${buildThreadSection(input)}
+${buildCandidateContextSection(input.candidateContext)}
 Latest utterance:
 """
 ${input.latestUtterance}
@@ -199,6 +226,19 @@ function parseCopilotJson(raw: string | null | undefined): CopilotAnswer {
   }
 }
 
+/**
+ * Groq's `openai/gpt-oss-*` models spend hidden "reasoning" tokens before answering —
+ * that eats into the free tier's tight 8k tokens/minute cap and adds multi-second
+ * latency for zero benefit on these short interview Q&A answers. Forcing low effort
+ * cuts reasoning tokens from ~500-700 down to ~15 with no quality loss.
+ * Groq-only extension — must not be sent to OpenAI/OpenRouter.
+ */
+function reasoningEffortParam(llm: LlmConfig): { reasoning_effort?: 'low' } {
+  return llm.provider === 'groq' && /^openai\/gpt-oss/.test(llm.model)
+    ? { reasoning_effort: 'low' }
+    : {};
+}
+
 async function createCompletion(
   llm: LlmConfig,
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
@@ -210,6 +250,7 @@ async function createCompletion(
     temperature: 0.25,
     max_tokens,
     messages,
+    ...reasoningEffortParam(llm),
   } as const;
 
   if (useJsonObject) {
@@ -267,6 +308,7 @@ Write the complete solution now.`;
       { role: 'system', content: CODE_GEN_SYSTEM },
       { role: 'user', content: user },
     ],
+    ...reasoningEffortParam(llm),
   });
 
   const raw = completion.choices[0]?.message?.content;
@@ -309,7 +351,7 @@ export function resolveLlmConfig(): LlmConfig {
         apiKey: groq,
         baseURL: 'https://api.groq.com/openai/v1',
       }),
-      model: process.env.LLM_MODEL?.trim() || 'llama-3.1-8b-instant',
+      model: process.env.LLM_MODEL?.trim() || 'openai/gpt-oss-20b',
       provider: 'groq',
     };
   }
@@ -463,6 +505,7 @@ const CHAT_SYSTEM = `You are CrackStack AI — a sharp, practical technical inte
 export async function runChatCompletion(
   llm: LlmConfig,
   messages: ChatTurn[],
+  candidateContext?: CandidateContext,
 ): Promise<string> {
   const fromEnv = parseInt(process.env.LLM_CHAT_MAX_TOKENS ?? '', 10);
   const max_tokens = Math.min(
@@ -470,17 +513,23 @@ export async function runChatCompletion(
     8192,
   );
 
+  const contextSection = buildCandidateContextSection(candidateContext);
+  const systemContent = contextSection
+    ? `${CHAT_SYSTEM}\n\n${CANDIDATE_CONTEXT_HINT}\n${contextSection}`
+    : CHAT_SYSTEM;
+
   const completion = await llm.client.chat.completions.create({
     model: llm.model,
     temperature: 0.35,
     max_tokens,
     messages: [
-      { role: 'system', content: CHAT_SYSTEM },
+      { role: 'system', content: systemContent },
       ...messages.slice(-28).map((m) => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
       })),
     ],
+    ...reasoningEffortParam(llm),
   });
 
   const text = completion.choices[0]?.message?.content?.trim();

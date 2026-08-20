@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   startMeetMixedPcmCapture,
   startMicPcmCapture,
@@ -20,6 +20,8 @@ const MIC_DEVICE_STORAGE = 'copilot.micDeviceId';
 const MIC_GAIN_STORAGE = 'copilot.micGain';
 const TAB_GAIN_STORAGE = 'copilot.tabGain';
 const HEADSET_MODE_STORAGE = 'copilot.headsetAudioMode';
+const RESUME_STORAGE = 'copilot.resumeText';
+const JOB_DESCRIPTION_STORAGE = 'copilot.jobDescription';
 
 /**
  * After each STT final, wait this long with no further finals before calling the model.
@@ -37,6 +39,27 @@ function mergeQuestionBurst(prev: string, next: string): string {
   if (b.startsWith(a)) return b;
   if (a.startsWith(b)) return a;
   return `${a} ${b}`;
+}
+
+/**
+ * Pulls likely proper nouns / tech terms (frameworks, languages, product names) out of a
+ * resume or job description so we can pass them to Deepgram as keyterm boosts — the words
+ * an interviewer is most likely to say (your stack, past employers) are exactly the ones
+ * generic STT models mis-hear most often.
+ */
+function extractKeytermsFromText(text: string, limit: number): string[] {
+  if (!text.trim()) return [];
+  const matches = text.match(/\b[A-Z][a-zA-Z0-9+.#]{2,}\b/g) ?? [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const m of matches) {
+    const key = m.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(m);
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 function readGainStorage(key: string, fallback: number): number {
@@ -89,6 +112,10 @@ export default function App() {
   const finalFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  /** True while mic + tab stream as separate Deepgram channels (see audio/capture.ts). */
+  const dualChannelActiveRef = useRef(false);
+  /** Single-source sessions only: which physical source that lone channel is. */
+  const soloSourceRef = useRef<'mic' | 'tab' | null>(null);
 
   const [toolsOpen, setToolsOpen] = useState(false);
   const [captureShield, setCaptureShield] = useState(true);
@@ -125,6 +152,31 @@ export default function App() {
       localStorage.getItem(HEADSET_MODE_STORAGE) !== '0',
   );
   const [deviceChangeHint, setDeviceChangeHint] = useState(false);
+
+  const [resumeText, setResumeTextState] = useState(() =>
+    typeof localStorage !== 'undefined'
+      ? (localStorage.getItem(RESUME_STORAGE) ?? '')
+      : '',
+  );
+  const [jobDescription, setJobDescriptionState] = useState(() =>
+    typeof localStorage !== 'undefined'
+      ? (localStorage.getItem(JOB_DESCRIPTION_STORAGE) ?? '')
+      : '',
+  );
+  const setResumeText = (v: string) => {
+    setResumeTextState(v);
+    localStorage.setItem(RESUME_STORAGE, v);
+  };
+  const setJobDescription = (v: string) => {
+    setJobDescriptionState(v);
+    localStorage.setItem(JOB_DESCRIPTION_STORAGE, v);
+  };
+  const candidateContext = useMemo(() => {
+    const resume = resumeText.trim();
+    const jd = jobDescription.trim();
+    if (!resume && !jd) return undefined;
+    return { resume: resume || undefined, jobDescription: jd || undefined };
+  }, [resumeText, jobDescription]);
 
   const [chatMessages, setChatMessages] = useState<ChatTurn[]>([]);
   const [chatInput, setChatInput] = useState('');
@@ -190,6 +242,7 @@ export default function App() {
         conversationThread: thread.length ? thread : undefined,
         manualContext: manual || undefined,
         mode,
+        candidateContext,
       });
       setGenerating(false);
       if (res.ok) {
@@ -200,6 +253,7 @@ export default function App() {
       }
     },
     [
+      candidateContext,
       capabilities.aiReady,
       rebuildSummary,
       setAnswer,
@@ -234,7 +288,7 @@ export default function App() {
     setChatMessages(next);
     setChatBusy(true);
     setError(null);
-    const res = await api.aiChat({ messages: next });
+    const res = await api.aiChat({ messages: next, candidateContext });
     setChatBusy(false);
     if (res.ok) {
       setChatMessages([...next, { role: 'assistant', content: res.text }]);
@@ -300,12 +354,29 @@ export default function App() {
   }, [setInteractionMode]);
 
   useEffect(() => {
+    /** Label + auto-answer decision for one resolved utterance. */
+    const commitFinal = (text: string, source: 'mic' | 'tab' | undefined) => {
+      const isDual = dualChannelActiveRef.current;
+      const isYou = isDual && source === 'mic';
+      appendFinalTranscript(isDual ? `${isYou ? 'You' : 'Interviewer'}: ${text}` : text);
+      rebuildSummary();
+      // In dual-channel mode, only the interviewer's channel should trigger an AI answer —
+      // otherwise your own voice (thinking out loud, repeating the question back) gets
+      // treated as the question and derails the answer.
+      if (isYou) return;
+      scheduleGenerateAfterSttSilence(text);
+    };
+
     const offT = api.onTranscript((ev) => {
+      const source = ev.source ?? soloSourceRef.current ?? undefined;
+      const isDual = dualChannelActiveRef.current;
+      const liveLabel = isDual ? `${source === 'mic' ? 'You' : 'Interviewer'}: ` : '';
+
       if (!ev.isFinal && !ev.speechFinal) {
-        setLiveLine(ev.text);
+        setLiveLine(`${liveLabel}${ev.text}`);
         return;
       }
-      setLiveLine(ev.text);
+      setLiveLine(`${liveLabel}${ev.text}`);
       const t = ev.text.trim();
       if (!t) return;
       if (ev.speechFinal) {
@@ -313,9 +384,7 @@ export default function App() {
           clearTimeout(finalFallbackTimerRef.current);
           finalFallbackTimerRef.current = null;
         }
-        appendFinalTranscript(t);
-        rebuildSummary();
-        scheduleGenerateAfterSttSilence(t);
+        commitFinal(t, source);
         return;
       }
       if (ev.isFinal) {
@@ -323,9 +392,7 @@ export default function App() {
           clearTimeout(finalFallbackTimerRef.current);
         }
         finalFallbackTimerRef.current = setTimeout(() => {
-          appendFinalTranscript(t);
-          rebuildSummary();
-          scheduleGenerateAfterSttSilence(t);
+          commitFinal(t, source);
         }, 750);
       }
     });
@@ -360,6 +427,8 @@ export default function App() {
     await stopCaptureRef.current?.();
     stopCaptureRef.current = null;
     listenModeRef.current = false;
+    dualChannelActiveRef.current = false;
+    soloSourceRef.current = null;
     await api.sttStop();
     setSttRunning(false);
   }, [setSttRunning]);
@@ -417,7 +486,18 @@ export default function App() {
           );
         }
 
-        const started = await api.sttStart({ sampleRate: capture.sampleRate });
+        dualChannelActiveRef.current = capture.channels === 2;
+        soloSourceRef.current = capture.soloSource ?? null;
+
+        const keyterms = [
+          ...extractKeytermsFromText(resumeText, 40),
+          ...extractKeytermsFromText(jobDescription, 40),
+        ];
+        const started = await api.sttStart({
+          sampleRate: capture.sampleRate,
+          channels: capture.channels,
+          keyterms: keyterms.length ? keyterms : undefined,
+        });
         if (!started.ok) {
           await capture.stop();
           setError(started.error);
@@ -440,8 +520,10 @@ export default function App() {
       capabilities.hasDeepgram,
       capabilities.platform,
       headsetMode,
+      jobDescription,
       micDeviceId,
       micGain,
+      resumeText,
       tabGain,
       setError,
       setSttRunning,
@@ -608,6 +690,39 @@ export default function App() {
 
             <div className="rounded-lg border border-copilot-border/80 bg-copilot-surface/30 p-2.5">
               <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-copilot-muted">
+                Your profile (personalizes answers)
+              </div>
+              <p className="mb-2 text-[10px] leading-snug text-copilot-muted">
+                Paste your resume and the target job description — behavioral
+                answers use your real background, and technical depth is
+                calibrated to the role. Also boosts speech recognition for
+                names/tech terms that appear here. Stays on this device;
+                sent only with each AI request.
+              </p>
+              <label className="mb-2 block text-[10px] text-copilot-muted">
+                Resume
+                <textarea
+                  value={resumeText}
+                  onChange={(e) => setResumeText(e.target.value)}
+                  rows={4}
+                  className="mt-0.5 w-full resize-none rounded-lg border border-copilot-border bg-copilot-surface/90 p-2 font-mono text-[11px] text-slate-100"
+                  placeholder="Paste your resume text…"
+                />
+              </label>
+              <label className="block text-[10px] text-copilot-muted">
+                Job description
+                <textarea
+                  value={jobDescription}
+                  onChange={(e) => setJobDescription(e.target.value)}
+                  rows={4}
+                  className="mt-0.5 w-full resize-none rounded-lg border border-copilot-border bg-copilot-surface/90 p-2 font-mono text-[11px] text-slate-100"
+                  placeholder="Paste the job description…"
+                />
+              </label>
+            </div>
+
+            <div className="rounded-lg border border-copilot-border/80 bg-copilot-surface/30 p-2.5">
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-copilot-muted">
                 Window opacity (same as top bar)
               </div>
               <div className="flex items-center gap-2">
@@ -675,7 +790,7 @@ export default function App() {
                 </span>
                 <span className="mt-0.5 block text-copilot-muted">
                   {capabilities.platform === 'win32'
-                    ? 'Uses your primary display for capture permission; audio is system loopback (what plays on your default output). The next checkbox controls whether your microphone is mixed in or left out.'
+                    ? 'Uses your primary display for capture permission; audio is system loopback (what plays on your default output). The next checkbox controls whether your microphone is added as a separate channel or left out.'
                     : 'When starting STT, pick the browser tab where Meet runs and turn on “Share tab audio”. The next checkbox can exclude your mic so only tab audio is transcribed.'}
                 </span>
               </span>
@@ -699,8 +814,8 @@ export default function App() {
                   </span>
                   <span className="mt-0.5 block text-copilot-muted">
                     {capabilities.platform === 'win32'
-                      ? 'STT listens to default playback (loopback) only — not your headset or USB mic. Uncheck to mix in your voice with remote audio.'
-                      : 'STT uses shared tab audio only. Uncheck to also capture your microphone.'}
+                      ? 'STT listens to default playback (loopback) only — not your headset or USB mic. Uncheck to add your mic as a separate channel, tagged “You” vs “Interviewer”.'
+                      : 'STT uses shared tab audio only. Uncheck to also capture your microphone as a separate, clearly tagged channel.'}
                   </span>
                 </span>
               </label>
@@ -1008,7 +1123,8 @@ export default function App() {
             </div>
             <p className="min-w-0 flex-1 text-[10px] leading-snug text-copilot-muted">
               <span className="text-slate-500">Listen</span> — system / meeting
-              audio.{' '}
+              audio, mic kept on a separate channel so only the interviewer
+              auto-triggers an answer.{' '}
               <span className="text-slate-500">Speak</span> — your mic only.
               Only one runs at a time.
             </p>

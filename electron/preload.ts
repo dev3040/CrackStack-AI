@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type {
   AppCapabilities,
+  CandidateContext,
   ChatTurn,
   CopilotAnswer,
   GenerateInput,
@@ -9,9 +10,13 @@ import type {
 
 export type CopilotApi = {
   capabilities: () => Promise<AppCapabilities>;
-  sttStart: (opts: { sampleRate: number }) => Promise<
-    { ok: true } | { ok: false; error: string }
-  >;
+  sttStart: (opts: {
+    sampleRate: number;
+    /** 2 = mic + tab streamed as separate channels (diarized "you" vs "interviewer"). */
+    channels?: 1 | 2;
+    /** Extra vocabulary boosts pulled from resume/JD, merged with DEEPGRAM_KEYTERMS. */
+    keyterms?: string[];
+  }) => Promise<{ ok: true } | { ok: false; error: string }>;
   sttStop: () => Promise<{ ok: true }>;
   sttSendPcm: (pcm: ArrayBuffer) => void;
   aiGenerate: (
@@ -20,7 +25,7 @@ export type CopilotApi = {
     { ok: true; answer: CopilotAnswer } | { ok: false; error: string }
   >;
   aiChat: (
-    payload: { messages: ChatTurn[] },
+    payload: { messages: ChatTurn[]; candidateContext?: CandidateContext },
   ) => Promise<{ ok: true; text: string } | { ok: false; error: string }>;
   overlaySetInteraction: (enabled: boolean) => Promise<boolean>;
   overlayGetInteraction: () => Promise<boolean>;

@@ -7,6 +7,15 @@ export type PcmCapture = {
   stop: () => Promise<void>;
   /** True only when Meet/tab audio was actually mixed in */
   hadMeetTabAudio: boolean;
+  /**
+   * 1 = a single source is streamed (see `soloSource`).
+   * 2 = mic and tab are streamed as separate interleaved PCM channels (channel 0 = mic,
+   * channel 1 = tab) so Deepgram can diarize "you" vs "interviewer" instead of us
+   * pre-mixing them into one lossy, clip-prone mono track.
+   */
+  channels: 1 | 2;
+  /** Only meaningful when channels === 1: which physical source that single channel is. */
+  soloSource?: 'mic' | 'tab';
 };
 
 export type CaptureAudioOptions = {
@@ -86,6 +95,8 @@ export async function startMicPcmCapture(
   return {
     sampleRate: ctx.sampleRate,
     hadMeetTabAudio: false,
+    channels: 1,
+    soloSource: 'mic',
     stop: async () => {
       processor.disconnect();
       gain.disconnect();
@@ -200,6 +211,8 @@ export async function startMeetMixedPcmCapture(
     return {
       sampleRate: ctx.sampleRate,
       hadMeetTabAudio: true,
+      channels: 1,
+      soloSource: 'tab',
       stop: async () => {
         processor.disconnect();
         tabGainNode.disconnect();
@@ -225,17 +238,24 @@ export async function startMeetMixedPcmCapture(
     tabGainNode.gain.value = tabGain;
     // ScriptProcessor has one input with N channels; connect()’s inputIndex is the *node* input, not channel.
     // Merger exposes two mono inputs → one stereo output for the processor.
+    //
+    // We used to sum mic + tab into a single mono sample here, which clips whenever both
+    // speak at once and blurs overlapping speech into one unrecognizable waveform — a real
+    // source of mis-transcribed words. Instead we keep them as two independent channels
+    // (interleaved L/R Int16, channel 0 = mic/you, channel 1 = tab/interviewer) and let
+    // Deepgram's multichannel mode transcribe each one separately.
     const merger = ctx.createChannelMerger(2);
     const processor = ctx.createScriptProcessor(bufferSize, 2, 1);
     processor.onaudioprocess = (ev) => {
       const m = ev.inputBuffer.getChannelData(0);
       const t = ev.inputBuffer.getChannelData(1);
       const n = m.length;
-      const pcm = new Int16Array(n);
+      const pcm = new Int16Array(n * 2);
       for (let i = 0; i < n; i++) {
-        const sum = m[i] + t[i];
-        const s = Math.max(-1, Math.min(1, sum));
-        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        const ms = Math.max(-1, Math.min(1, m[i]));
+        const ts = Math.max(-1, Math.min(1, t[i]));
+        pcm[i * 2] = ms < 0 ? ms * 0x8000 : ms * 0x7fff;
+        pcm[i * 2 + 1] = ts < 0 ? ts * 0x8000 : ts * 0x7fff;
       }
       onPcm(pcm.buffer.slice(0));
     };
@@ -252,6 +272,7 @@ export async function startMeetMixedPcmCapture(
     return {
       sampleRate: ctx.sampleRate,
       hadMeetTabAudio: true,
+      channels: 2,
       stop: async () => {
         processor.disconnect();
         merger.disconnect();
@@ -287,6 +308,8 @@ export async function startMeetMixedPcmCapture(
   return {
     sampleRate: ctx.sampleRate,
     hadMeetTabAudio,
+    channels: 1,
+    soloSource: 'mic',
     stop: async () => {
       processor.disconnect();
       micGainNode.disconnect();
